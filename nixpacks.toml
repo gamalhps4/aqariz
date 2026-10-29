@@ -1,0 +1,32 @@
+# Why this file exists
+#
+# 1. Nixpacks hardcodes `npm install -g corepack@0.24.1 && corepack enable` whenever
+#    package.json has a `packageManager` field, with no env var to bump it. corepack
+#    0.24.1 (Jan 2024) evaluates the package-manager bundle through `vm` without a
+#    dynamic-import callback, so launching a modern pnpm dies with
+#    ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING. Overriding the install phase is the only
+#    in-repo way to displace that line.
+#
+# 2. A plain `npm install -g pnpm` is not enough: nixpacks' npm global prefix is not on
+#    the login-shell PATH, so the next layer fails with `pnpm: command not found`.
+#    Install into /usr/local instead — /usr/local/bin is in Docker's default PATH and in
+#    /etc/profile — and invoke pnpm by absolute path so no phase depends on PATH order.
+#
+# pnpm 11 specifically. "10 or newer" is not enough:
+#   * `overrides` in pnpm-workspace.yaml is pnpm 10+ only. Under pnpm 9 (the nix default
+#     here) the frozen install fails with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
+#   * `allowBuilds` in pnpm-workspace.yaml is pnpm 11 only. pnpm 10 ignores it and, since
+#     it blocks build scripts by default, sharp / esbuild / prisma would never compile
+#     their native binaries — install goes green and `next build` then fails.
+#
+# Keep this version in sync with `packageManager` in package.json.
+
+[phases.install]
+cmds = [
+  "npm install -g --prefix /usr/local pnpm@11.10.0",
+  "/usr/local/bin/pnpm --version",
+  "/usr/local/bin/pnpm i --frozen-lockfile",
+]
+
+[phases.build]
+cmds = ["/usr/local/bin/pnpm run build"]

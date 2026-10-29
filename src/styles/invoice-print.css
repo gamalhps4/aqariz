@@ -1,0 +1,420 @@
+/**
+ * PropertyPro - Invoice Print Styles
+ * Optimized CSS for printing and PDF generation
+ *
+ * Printed in the app's one typeface, Cairo (`--font-sans-app`, loaded by the
+ * root layout with its Arabic glyphs). The sheet used to force Arial, which
+ * has no designed Arabic: an Arabic invoice printed in whatever fallback the
+ * printer's machine had. Alignment and the column rules use logical sides, so
+ * an Arabic invoice prints right to left with its rules on the correct edge.
+ */
+
+/* Print-specific styles */
+@media print {
+  /* Reset and base styles */
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-print-color-adjust: exact !important;
+    color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Page setup */
+  @page {
+    size: A4;
+    margin: 0.5in;
+    padding: 0;
+    background: white;
+  }
+
+  /* Body and container */
+  body {
+    font-family: var(--font-sans-app), "Cairo", Tahoma, "Noto Sans Arabic",
+      sans-serif !important;
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+    color: #333333 !important;
+    background: white !important;
+    -webkit-print-color-adjust: exact !important;
+    color-adjust: exact !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Print container specific styles */
+  .print-container {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 32px !important;
+    background: white !important;
+    font-family: var(--font-sans-app), "Cairo", Tahoma, "Noto Sans Arabic",
+      sans-serif !important;
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+    color: #333333 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Hide non-printable elements */
+  .print\:hidden,
+  .no-print,
+  button,
+  .btn,
+  nav,
+  .navigation,
+  .sidebar,
+  .header-actions,
+  .action-buttons {
+    display: none !important;
+  }
+
+  /* Invoice container */
+  .invoice-container,
+  .clean-invoice {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* Typography */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    color: #111827 !important;
+    page-break-after: avoid;
+  }
+
+  p {
+    orphans: 3;
+    widows: 3;
+  }
+
+  /* Tables */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    border: 1px solid #e5e7eb !important;
+    page-break-inside: avoid;
+  }
+
+  th,
+  td {
+    padding: 12px 16px !important;
+    text-align: start !important;
+    vertical-align: top !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    border-inline-end: 1px solid #e5e7eb !important;
+  }
+
+  th {
+    background-color: #f9fafb !important;
+    font-weight: 600 !important;
+    color: #111827 !important;
+    font-size: 13px !important;
+    -webkit-print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  td {
+    font-size: 13px !important;
+    color: #111827 !important;
+  }
+
+  /* Remove last border */
+  th:last-child,
+  td:last-child {
+    border-inline-end: none !important;
+  }
+
+  /* Colors and backgrounds */
+  .bg-green-500 {
+    background-color: #10b981 !important;
+    -webkit-print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  .bg-green-100 {
+    background-color: #dcfce7 !important;
+    -webkit-print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  .text-green-800 {
+    color: #166534 !important;
+  }
+
+  .bg-gray-50 {
+    background-color: #f9fafb !important;
+    -webkit-print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  /* Ensure proper text colors for print */
+  .text-gray-900,
+  .text-gray-800,
+  .text-gray-700 {
+    color: #111827 !important;
+  }
+
+  .text-gray-600,
+  .text-gray-500 {
+    color: #6b7280 !important;
+  }
+
+  /* Borders */
+  .border,
+  .border-gray-200 {
+    border: 1px solid #e5e7eb !important;
+  }
+
+  .border-t {
+    border-top: 1px solid #e5e7eb !important;
+  }
+
+  .border-b {
+    border-bottom: 1px solid #e5e7eb !important;
+  }
+
+  /* Spacing */
+  .mb-8 {
+    margin-bottom: 32px !important;
+  }
+
+  .mb-4 {
+    margin-bottom: 16px !important;
+  }
+
+  .mb-2 {
+    margin-bottom: 8px !important;
+  }
+
+  .mt-4 {
+    margin-top: 16px !important;
+  }
+
+  .p-8 {
+    padding: 32px !important;
+  }
+
+  .p-6 {
+    padding: 24px !important;
+  }
+
+  .p-4 {
+    padding: 16px !important;
+  }
+
+  /* Flexbox and grid */
+  .flex {
+    display: flex !important;
+  }
+
+  .grid {
+    display: grid !important;
+  }
+
+  .grid-cols-2 {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .gap-8 {
+    gap: 32px !important;
+  }
+
+  .gap-4 {
+    gap: 16px !important;
+  }
+
+  .justify-between {
+    justify-content: space-between !important;
+  }
+
+  .justify-end {
+    justify-content: flex-end !important;
+  }
+
+  .items-start {
+    align-items: flex-start !important;
+  }
+
+  .items-center {
+    align-items: center !important;
+  }
+
+  /* Text alignment */
+  .text-left {
+    text-align: left !important;
+  }
+
+  .text-right {
+    text-align: right !important;
+  }
+
+  .text-start {
+    text-align: start !important;
+  }
+
+  .text-end {
+    text-align: end !important;
+  }
+
+  .text-center {
+    text-align: center !important;
+  }
+
+  /* Font weights */
+  .font-bold {
+    font-weight: 700 !important;
+  }
+
+  .font-semibold {
+    font-weight: 600 !important;
+  }
+
+  .font-medium {
+    font-weight: 500 !important;
+  }
+
+  /* Font sizes */
+  .text-xs {
+    font-size: 12px !important;
+  }
+
+  .text-sm {
+    font-size: 14px !important;
+  }
+
+  .text-base {
+    font-size: 16px !important;
+  }
+
+  .text-lg {
+    font-size: 18px !important;
+  }
+
+  .text-xl {
+    font-size: 20px !important;
+  }
+
+  .text-2xl {
+    font-size: 24px !important;
+  }
+
+  .text-3xl {
+    font-size: 30px !important;
+  }
+
+  /* Page breaks */
+  .page-break-before {
+    page-break-before: always;
+  }
+
+  .page-break-after {
+    page-break-after: always;
+  }
+
+  .page-break-inside-avoid {
+    page-break-inside: avoid;
+  }
+
+  /* Avoid breaking these elements */
+  .invoice-header,
+  .invoice-details,
+  .invoice-totals,
+  .invoice-notes {
+    page-break-inside: avoid;
+  }
+
+  /* Ensure proper spacing for invoice sections */
+  .invoice-section {
+    margin-bottom: 24px !important;
+    page-break-inside: avoid;
+  }
+
+  /* Logo and branding */
+  .company-logo {
+    max-width: 120px !important;
+    max-height: 60px !important;
+  }
+
+  /* Status badges */
+  .status-badge {
+    padding: 4px 12px !important;
+    border-radius: 20px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    display: inline-block !important;
+  }
+
+  /* Invoice number and dates */
+  .invoice-meta {
+    font-size: 14px !important;
+    color: #6b7280 !important;
+  }
+
+  /* Total amount highlighting */
+  .total-amount {
+    font-size: 18px !important;
+    font-weight: 700 !important;
+    color: #111827 !important;
+  }
+
+  /* Ensure all text is black for better printing */
+  .text-gray-900,
+  .text-gray-800,
+  .text-gray-700 {
+    color: #111827 !important;
+  }
+
+  .text-gray-600,
+  .text-gray-500 {
+    color: #6b7280 !important;
+  }
+
+  /* Remove shadows and rounded corners for print */
+  .shadow,
+  .shadow-lg,
+  .shadow-md,
+  .shadow-sm {
+    box-shadow: none !important;
+  }
+
+  .rounded,
+  .rounded-lg,
+  .rounded-md {
+    border-radius: 0 !important;
+  }
+
+  /* Ensure proper contrast */
+  .bg-blue-50 {
+    background-color: #f0f9ff !important;
+    -webkit-print-color-adjust: exact !important;
+  }
+
+  .bg-yellow-50 {
+    background-color: #fefce8 !important;
+    -webkit-print-color-adjust: exact !important;
+  }
+
+  .bg-green-50 {
+    background-color: #f0fdf4 !important;
+    -webkit-print-color-adjust: exact !important;
+  }
+}
+
+/* Screen-only styles (hidden in print) */
+@media screen {
+  .print-only {
+    display: none !important;
+  }
+}

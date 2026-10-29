@@ -1,0 +1,3313 @@
+// PropertyPro SaaS — PostgreSQL schema (migrated from MongoDB/Mongoose).
+//
+// Conventions:
+// - String cuid() primary keys everywhere.
+// - Status/role/category columns are String, not Prisma enums: the app's
+//   permission system allows custom role names, and the TS string enums in
+//   src/types remain the single source of truth for closed sets.
+// - Money is Decimal(14,2), stored exactly. Application code still works in
+//   JS numbers: the money result extension in src/lib/db/prisma.ts converts
+//   Decimal fields to number on read, and Postgres rounds writes to 2dp.
+// - Deep Mongoose subdocument trees that were never queried relationally ride
+//   along as Json; structures the app filters on became real tables (the
+//   embedded Property.units array most importantly — now the Unit model).
+// - Tenant isolation: every org-scoped table carries organizationId and gets
+//   row-level-security policies in the SQL migration; the client in
+//   src/lib/db/prisma.ts stamps app.current_org_id per query.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================================
+// PLATFORM
+// ============================================================================
+
+model Organization {
+  id                    String    @id @default(cuid())
+  name                  String
+  slug                  String    @unique
+  ownerId               String
+  status                String    @default("trial") // active | suspended | trial
+  plan                  String    @default("free") // Plan.key
+  stripeCustomerId      String?   @unique
+  stripeSubscriptionId  String?   @unique
+  stripePriceId         String?
+  subscriptionStatus    String?
+  trialEndsAt           DateTime?
+  currentPeriodEnd      DateTime?
+  cancelAtPeriodEnd     Boolean   @default(false)
+  // Dunning / trial lifecycle. `pastDueSince` is stamped the first time Stripe
+  // reports a failed payment and cleared on recovery; the grace window is
+  // measured from it. The *NotifiedAt columns make the reminder emails
+  // idempotent so a cron that runs hourly still mails once.
+  pastDueSince          DateTime?
+  dunningNotifiedAt     DateTime?
+  trialEndingNotifiedAt DateTime?
+  trialExpiredAt        DateTime?
+  // What Stripe actually charges, mirrored on sync. MRR used to be inferred
+  // from the local plan price, so promo codes, grandfathered pricing and
+  // annual terms all silently corrupted it.
+  subscriptionAmount    Decimal?  @db.Decimal(14, 2)
+  subscriptionCurrency  String?
+  /**
+   * month | year — an annual plan contributes amount/12 to MRR.
+   */
+  subscriptionInterval  String?
+  branding              Json      @default("{}")
+  settings              Json      @default("{}")
+  deletedAt             DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  users                   User[]
+  sessions                Session[]
+  roles                   Role[]
+  tenants                 Tenant[]
+  properties              Property[]
+  units                   Unit[]
+  leases                  Lease[]
+  applications            Application[]
+  invitationTokens        InvitationToken[]
+  invoices                Invoice[]
+  invoiceLines            InvoiceLine[]
+  payments                Payment[]
+  paymentReceipts         PaymentReceipt[]
+  paymentNotifications    PaymentNotification[]
+  recurringPayments       RecurringPayment[]
+  securityDeposits        SecurityDeposit[]
+  expenses                Expense[]
+  suppliers               Supplier[]
+  maintenanceRequests     MaintenanceRequest[]
+  workOrders              WorkOrder[]
+  tickets                 Ticket[]
+  inspections             Inspection[]
+  documents               Document[]
+  documentTemplates       DocumentTemplate[]
+  conversations           Conversation[]
+  messages                Message[]
+  messageStatuses         MessageStatus[]
+  events                  Event[]
+  eventInvitations        EventInvitation[]
+  eventReminders          EventReminder[]
+  calendarSettings        CalendarSettings[]
+  announcements           Announcement[]
+  notifications           Notification[]
+  pushSubscriptions       PushSubscription[]
+  auditLogs               AuditLog[]
+  propertyStatusAuditLogs PropertyStatusAuditLog[]
+  systemSettings          SystemSettings[]
+  profileSettings         ProfileSettings[]
+  displaySettings         DisplaySettings[]
+  platformAuditLogs       PlatformAuditLog[]
+  compounds               Compound[]
+  propertyCategories      PropertyCategory[]
+  owners                  Owner[]
+  agreements              Agreement[]
+  clientCommunications    ClientCommunication[]
+  feedback                Feedback[]
+  ledgerAccounts          LedgerAccount[]
+  journalEntries          JournalEntry[]
+  journalLines            JournalLine[]
+  accountingSettings      AccountingSettings?
+  bankAccounts            BankAccount[]
+  bankTransfers           BankTransfer[]
+  ownerSettlements        OwnerSettlement[]
+  ownerPayouts            OwnerPayout[]
+  purchaseBills           PurchaseBill[]
+  purchaseBillLines       PurchaseBillLine[]
+  paymentVouchers         PaymentVoucher[]
+  paymentVoucherAllocations PaymentVoucherAllocation[]
+  bankReconciledLines     BankReconciledLine[]
+  listings                Listing[]
+  listingInquiries        ListingInquiry[]
+
+  @@index([status])
+  @@index([ownerId])
+  @@index([subscriptionStatus])
+  @@index([deletedAt])
+  @@index([pastDueSince])
+  @@index([trialEndsAt])
+  @@map("organizations")
+}
+
+model Plan {
+  id                     String   @id @default(cuid())
+  key                    String   @unique
+  name                   String
+  description            String   @default("")
+  monthlyPrice           Decimal  @default(0) @db.Decimal(14, 2)
+  isCustom               Boolean  @default(false)
+  priceSuffix            String   @default("per month")
+  stripePriceId          String?
+  /**
+   * Optional annual price. When set, checkout offers a yearly term.
+   */
+  stripePriceIdYearly    String?
+  /**
+   * Annual charge for the yearly term. Derived server-side from
+   * `monthlyPrice`, `annualEnabled`, and `yearlyDiscountPercent` — never
+   * trusted from the client — so a monthly price change carries the annual
+   * price with it instead of leaving a stale figure behind. Null when the plan
+   * offers no annual term.
+   */
+  yearlyPrice            Decimal? @db.Decimal(14, 2)
+  /**
+   * Turning this on is all it takes to offer a yearly term: the price is
+   * calculated as twelve months less `yearlyDiscountPercent`.
+   */
+  annualEnabled          Boolean  @default(false)
+  /**
+   * Percent off twelve months' rent. 0 means a straight 12x annual price.
+   */
+  yearlyDiscountPercent  Decimal  @default(0) @db.Decimal(5, 2)
+  /**
+   * Escape hatch: bill a hand-typed annual amount instead of the calculated
+   * one. The discount is kept while overridden so switching back restores it.
+   */
+  yearlyPriceOverride    Boolean  @default(false)
+  limitsProperties       Int?
+  limitsMembers          Int?
+  // Units and storage are the real cost drivers in this product — a single
+  // "property" can hold unlimited units, and uploaded documents/images are
+  // billed by the gigabyte. Null means unlimited, as with the other two.
+  limitsUnits            Int?
+  limitsStorageMb        Int?
+  // Added alongside the module-level entitlement catalog so a plan can be
+  // shaped by volume as well as by which modules it opens. Null is unlimited
+  // on every one of them, matching the columns above.
+  limitsTenants          Int?
+  limitsLeases           Int?
+  limitsDocuments        Int?
+  /**
+   * Resets each calendar month, unlike every other limit here, which counts
+   * live rows. `billing/usage` is the only place that distinction is applied.
+   */
+  limitsInvoicesPerMonth Int?
+  /// Messages a month through the platform's SMS/WhatsApp gateway; null is
+  /// unlimited. Raw SQL in src/lib/billing/plan-message-limit.ts; @ignore
+  /// until migration 20261004113500_messaging is applied everywhere.
+  limitsMessagesPerMonth Int?     @ignore
+  features               String[] @default([])
+  highlights             String[] @default([])
+  featuresHeader         String?
+  ctaLabel               String   @default("Get started")
+  ctaHref                String   @default("/auth/signup")
+  popular                Boolean  @default(false)
+  isPublic               Boolean  @default(true)
+  isActive               Boolean  @default(true)
+  isSystem               Boolean  @default(false)
+  sortOrder              Int      @default(0)
+  /// The plan card's Arabic text for /ar and /ar/pricing:
+  /// { ar: { name, description, highlights, priceSuffix, featuresHeader,
+  /// ctaLabel } }, every field optional and falling back to the English one.
+  /// Nullable with no @default (Prisma 7 sends defaults in every insert);
+  /// migration 20261017120000_landing_arabic_and_custom_sections.
+  translations           Json?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([isPublic, isActive, sortOrder])
+  @@index([stripePriceId])
+  @@map("plans")
+}
+
+/**
+ * Client- and server-reported application errors.
+ * Deliberately NOT org-scoped in the RLS sense: an error can be reported
+ * before sign-in (no organization to attribute it to) and the console that
+ * reads them is the platform one. `organizationId` is a nullable attribution
+ * field, not a tenancy boundary — the same shape `users` and
+ * `platform_audit_logs` already use.
+ */
+model ErrorLog {
+  id             String    @id @default(cuid())
+  fingerprint    String
+  message        String
+  stack          String?
+  category       String    @default("unknown")
+  severity       String    @default("medium")
+  /**
+   * Times this fingerprint has been reported; a hot loop must not write
+   * thousands of rows.
+   */
+  occurrences    Int       @default(1)
+  organizationId String?
+  userId         String?
+  userEmail      String?
+  path           String?
+  method         String?
+  userAgent      String?
+  digest         String?
+  metadata       Json      @default("{}")
+  resolvedAt     DateTime?
+  firstSeenAt    DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([fingerprint])
+  @@index([severity, lastSeenAt])
+  @@index([organizationId])
+  @@index([resolvedAt])
+  @@map("error_logs")
+}
+
+/**
+ * TOTP secrets and backup codes, owned by Better Auth's two-factor plugin.
+ * Infrastructure like `auth_accounts`: written only through the bypass client
+ * and never readable from an org-scoped query.
+ */
+model TwoFactor {
+  id                      String    @id @default(cuid())
+  secret                  String
+  backupCodes             String
+  userId                  String
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verified                Boolean   @default(true)
+  failedVerificationCount Int       @default(0)
+  lockedUntil             DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([secret])
+  @@map("auth_two_factors")
+}
+
+/**
+ * Platform-wide notices from the operator to every tenant — maintenance
+ * windows, incidents, release notes.
+ * Distinct from `Announcement`, which is an org-scoped feature a landlord uses
+ * to talk to their own tenants. This one crosses organizations by design, so
+ * it is a global catalog: world-readable, platform-writable, like `plans`.
+ */
+model PlatformAnnouncement {
+  id          String    @id @default(cuid())
+  title       String
+  body        String
+  /**
+   * info | warning | critical — drives the banner's colour and urgency.
+   */
+  level       String    @default("info")
+  /**
+   * Null means "everyone"; otherwise a role name (admin, manager, tenant).
+   */
+  audience    String?
+  /**
+   * Dismissible notices let a reader hide them; critical ones usually don't.
+   */
+  dismissible Boolean   @default(true)
+  publishedAt DateTime?
+  startsAt    DateTime?
+  endsAt      DateTime?
+  linkLabel   String?
+  linkUrl     String?
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([publishedAt, endsAt])
+  @@map("platform_announcements")
+}
+
+/**
+ * A post on the marketing site's blog, written in the console (/admin/blog)
+ * and read at /blog and /ar/blog. Both languages live in one row: the slug,
+ * the cover, the tags and the author are shared, the words are per language.
+ *
+ * A language "exists" when its title and content are both filled
+ * (lib/blog/languages.ts): an English-only post is on /blog and not /ar/blog,
+ * and the other way round. A published post has at least one. Platform-wide
+ * like `plans` and `landing_pages`, so not org-scoped; the RLS policies in
+ * migration 20261017130000_blog_posts let anyone read a published post and
+ * only the platform read a draft or write.
+ */
+model BlogPost {
+  id               String    @id @default(cuid())
+  /// URL-safe, shared by both languages: /blog/<slug> and /ar/blog/<slug>.
+  slug             String    @unique
+  /// draft | published (a CHECK in the migration holds it to those two).
+  status           String    @default("draft")
+  titleEn          String    @default("")
+  titleAr          String    @default("")
+  excerptEn        String    @default("")
+  excerptAr        String    @default("")
+  /// The body, in the blog's Markdown subset (lib/blog/markdown.ts). Never
+  /// rendered as HTML.
+  contentEn        String    @default("")
+  contentAr        String    @default("")
+  /// Optional search-result overrides; the title and excerpt stand in.
+  seoTitleEn       String?
+  seoTitleAr       String?
+  seoDescriptionEn String?
+  seoDescriptionAr String?
+  coverImage       String?
+  coverImageAlt    String?
+  coverImageAltAr  String?
+  authorName       String?
+  tags             String[]  @default([])
+  /// Set the first time the post is published and kept through an
+  /// unpublish, so republishing does not move it to the top of the blog.
+  publishedAt      DateTime?
+  createdById      String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([status, publishedAt])
+  @@map("blog_posts")
+}
+
+/**
+ * A message sent from the public contact form.
+ * Platform-level on purpose: the sender is usually a visitor with no account,
+ * so there is no organization to scope the row to. It lands in the operator's
+ * console inbox (/admin/inbox) rather than an email client so the reply, the
+ * status and the audit trail all live in one place.
+ */
+model ContactMessage {
+  id      String  @id @default(cuid())
+  /**
+   * support | sales | billing | security — the card the sender picked.
+   */
+  topic   String  @default("support")
+  name    String
+  email   String
+  /**
+   * Free text — the sender's own words, not a link to an Organization.
+   */
+  company String?
+  subject String
+  message String
+
+  /**
+   * new | open | replied | closed — an operator's triage state.
+   */
+  status      String    @default("new")
+  isRead      Boolean   @default(false)
+  readAt      DateTime?
+  readById    String?
+  isStarred   Boolean   @default(false)
+  isArchived  Boolean   @default(false)
+  archivedAt  DateTime?
+  lastReplyAt DateTime?
+
+  /**
+   * Set when a signed-in user submitted the form; null for anonymous visitors.
+   */
+  submittedById String?
+  /**
+   * Kept for abuse triage only — never shown as an identity.
+   */
+  ipAddress     String?
+  userAgent     String?
+  source        String  @default("contact_form")
+  metadata      Json    @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  replies ContactMessageReply[]
+
+  @@index([isArchived, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([topic, createdAt(sort: Desc)])
+  @@index([isRead, createdAt(sort: Desc)])
+  @@map("contact_messages")
+}
+
+/**
+ * An operator's reply on a contact thread. Stored even when the outbound email
+ * fails so the console still shows what was said and why it did not arrive.
+ */
+model ContactMessageReply {
+  id               String         @id @default(cuid())
+  contactMessageId String
+  contactMessage   ContactMessage @relation(fields: [contactMessageId], references: [id], onDelete: Cascade)
+  body             String
+  authorId         String
+  authorName       String
+  authorEmail      String
+  emailSent        Boolean        @default(false)
+  emailError       String?
+  createdAt        DateTime       @default(now())
+
+  @@index([contactMessageId, createdAt])
+  @@map("contact_message_replies")
+}
+
+model PlatformAuditLog {
+  id             String        @id @default(cuid())
+  actorId        String
+  actorEmail     String
+  // The operator's name when they acted, and where they acted from.
+  actorName      String?
+  ipAddress      String?
+  userAgent      String?
+  action         String
+  targetType     String
+  targetId       String
+  targetName     String
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  summary        String
+  metadata       Json          @default("{}")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([targetType, targetId, createdAt(sort: Desc)])
+  @@map("platform_audit_logs")
+}
+
+model LandingPage {
+  id             String   @id @default(cuid())
+  singleton      String   @unique @default("primary")
+  sections       Json     @default("[]")
+  header         Json     @default("{}")
+  hero           Json     @default("{}")
+  product        Json     @default("{}")
+  features       Json     @default("{}")
+  howItWorks     Json     @default("{}")
+  testimonial    Json     @default("{}")
+  pricing        Json     @default("{}")
+  cta            Json     @default("{}")
+  footer         Json     @default("{}")
+  seoTitle       String   @default("")
+  seoDescription String   @default("")
+  /// The Arabic page (/ar) as an overlay of the English blocks' text only:
+  /// { ar: { hero: {...}, ..., seo: {...}, custom: { [id]: {...} } } }.
+  /// Images, links and numbers always come from the English blocks. Null
+  /// until the console first saves Arabic text; the shipped translation
+  /// (lib/marketing/landing-ar.ts) fills the gaps. No @default: Prisma 7
+  /// would send it in every insert, and the seed insert must keep working on
+  /// a database migration 20261017120000_landing_arabic_and_custom_sections
+  /// has not reached. Left out of reads until then (lib/db/prisma.ts omit).
+  translations   Json?
+  /// Operator-made homepage sections (heading, body, image, button), placed
+  /// in `sections` by "custom:<id>" keys. Null is none. Same migration.
+  customSections Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("landing_pages")
+}
+
+model PlatformSettings {
+  id           String   @id @default(cuid())
+  singleton    String   @unique @default("primary")
+  general      Json     @default("{}")
+  registration Json     @default("{}")
+  maintenance  Json     @default("{}")
+  email        Json     @default("{}")
+  /// Platform-wide module switches: { "disabled": ["<module key>", ...] }.
+  /// Null means every module is on. Read and written with raw SQL in
+  /// src/lib/billing/platform-modules.ts; @ignore keeps it out of the client's
+  /// default selects until migration 20261003150000 is applied everywhere.
+  modules      Json?    @ignore
+  /// The Super Admin's default SMS and WhatsApp gateway, for offices without
+  /// their own account: { sms: {...}, whatsapp: {...} }, secrets encrypted.
+  /// Raw SQL in src/lib/messaging/store.ts; @ignore until migration
+  /// 20261004113500_messaging is applied everywhere (as `modules` above).
+  messaging    Json?    @ignore
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+/// Consolidated webhook-idempotency ledger for every payment gateway.
+/// Claim = INSERT (unique violation ⇒ duplicate); release = DELETE on failure.
+model WebhookEvent {
+  id          String   @id @default(cuid())
+  gateway     String // stripe | stripe_billing | paypal | paystack | razorpay
+  /**
+   * The office whose webhook claimed the event; null for the platform's own
+   * (Stripe billing) and for rows from before it was recorded. The unique
+   * index is NULLS NOT DISTINCT (migration 20261004220000), which Prisma
+   * cannot express. Left out of reads (src/lib/db/prisma.ts), so a database
+   * without that migration still answers.
+   */
+  organizationId String?
+  eventId     String
+  eventType   String?
+  processedAt DateTime @default(now())
+
+  @@unique([gateway, organizationId, eventId])
+  @@index([processedAt])
+  @@map("webhook_events")
+}
+
+// ============================================================================
+// AUTH (Better Auth owns these; app reads sessions via the org-scoped client)
+// ============================================================================
+
+model User {
+  id                         String        @id @default(cuid())
+  email                      String?       @unique
+  firstName                  String
+  lastName                   String
+  name                       String? // Better Auth's combined display name (derived)
+  phone                      String?
+  organizationId             String?
+  organization               Organization? @relation(fields: [organizationId], references: [id])
+  role                       String        @default("tenant")
+  /**
+   * Per-employee permission overrides, applied on top of whatever the role
+   * grants. Two lists rather than one map so the intent is explicit in the
+   * data: `permissionGrants` adds a capability this person needs and the role
+   * does not carry, `permissionDenials` takes one away.
+   * DENIALS WIN. A permission in both lists is denied — the safe reading of a
+   * contradiction, and the one that makes "revoke X from this employee"
+   * dependable no matter what their role changes to later.
+   * Empty on almost every row: the role is still the normal way to grant
+   * access, and these exist for the exceptions an office actually has.
+   */
+  permissionGrants           String[]      @default([])
+  permissionDenials          String[]      @default([])
+  /**
+   * Whether this employee sees only the compounds and buildings assigned to
+   * them. False for almost everyone: the office's own staff see the office's
+   * own data, and narrowing is the exception an organization opts into.
+   * A FLAG, not "are the lists empty". Without it, an admin who assigned two
+   * buildings and later removed both would silently hand that employee the
+   * whole organization — the widening direction, discovered by accident. With
+   * it, `scopeRestricted` with empty lists means exactly what it says: this
+   * person has been given nothing yet and sees nothing. See lib/db/scopes.ts,
+   * where an empty id list matches no rows rather than all of them.
+   * Owners and tenants are unaffected; their own narrower rules already win.
+   */
+  scopeRestricted            Boolean       @default(false)
+  /**
+   * Assigned compounds. A compound grants its buildings — the office assigns
+   * "الياسمين" once rather than re-listing its towers every time one is added.
+   * Resolved to property ids per request; see lib/db/staff-scope.ts.
+   */
+  scopedCompoundIds          String[]      @default([])
+  /**
+   * Individually assigned buildings, for staff who cover part of a compound.
+   */
+  scopedPropertyIds          String[]      @default([])
+  avatar                     String?
+  bio                        String?
+  location                   String?
+  city                       String?
+  website                    String?
+  address                    String?
+  isActive                   Boolean       @default(true)
+  emailVerified              DateTime?
+  emailVerifiedFlag          Boolean       @default(false)
+  /**
+   * Written by Better Auth's two-factor plugin; see the TwoFactor model.
+   */
+  twoFactorEnabled           Boolean       @default(false)
+  lastLogin                  DateTime?
+  passwordChangedAt          DateTime?
+  failedLoginAttempts        Int           @default(0)
+  isLocked                   Boolean       @default(false)
+  lockedUntil                DateTime?
+  deletedAt                  DateTime?
+  dateOfBirth                DateTime?
+  // Sensitive tenant PII (ssn, employmentInfo, creditScore) lives ONLY on the
+  // Tenant profile model — it used to exist writable in both places, with the
+  // create path writing here and the update path writing there.
+  emergencyContacts          Json          @default("[]")
+  documents                  String[]      @default([])
+  backgroundCheckStatus      String        @default("pending")
+  tenantStatus               String?
+  applicationDate            DateTime      @default(now())
+  screeningScore             Int?
+  applicationNotes           String?
+  currentLeaseId             String?
+  leaseHistory               Json          @default("[]")
+  moveInDate                 DateTime?
+  moveOutDate                DateTime?
+  statusHistory              Json          @default("[]")
+  preferredContactMethod     String        @default("email")
+  emergencyContactVerified   Boolean       @default(false)
+  backgroundCheckCompletedAt DateTime?
+  lastStatusUpdate           DateTime      @default(now())
+  integrations               Json          @default("{}")
+  notificationPreferences    Json          @default("{}")
+  stripeCustomerId           String?
+  createdAt                  DateTime      @default(now())
+  updatedAt                  DateTime      @updatedAt
+
+  accounts                 Account[]
+  sessions                 Session[]
+  twoFactors               TwoFactor[]
+  tenantProfile            Tenant?
+  leasesAsTenant           Lease[]               @relation("LeaseTenant")
+  invoicesAsTenant         Invoice[]             @relation("InvoiceTenant")
+  invoicesAsCustomer       Invoice[]             @relation("InvoiceCustomer")
+  paymentsAsTenant         Payment[]             @relation("PaymentTenant")
+  paymentsRecorded         Payment[]             @relation("PaymentRecorder")
+  receiptsAsTenant         PaymentReceipt[]      @relation("ReceiptTenant")
+  paymentNotifications     PaymentNotification[] @relation("PaymentNotificationTenant")
+  recurringPayments        RecurringPayment[]    @relation("RecurringPaymentTenant")
+  securityDeposits         SecurityDeposit[]     @relation("SecurityDepositTenant")
+  maintenanceAsTenant      MaintenanceRequest[]  @relation("MaintenanceTenant")
+  maintenanceAssigned      MaintenanceRequest[]  @relation("MaintenanceAssignee")
+  workOrdersAssigned       WorkOrder[]           @relation("WorkOrderAssignee")
+  ticketsAsTenant          Ticket[]              @relation("TicketTenant")
+  ticketsAssigned          Ticket[]              @relation("TicketAssignee")
+  propertiesOwned          Property[]            @relation("PropertyOwner")
+  propertiesManaged        Property[]            @relation("PropertyManager")
+  unitsOccupied            Unit[]                @relation("UnitCurrentTenant")
+  inspectionsAsInspector   Inspection[]          @relation("InspectionInspector")
+  documentsUploaded        Document[]            @relation("DocumentUploader")
+  applications             Application[]         @relation("ApplicationApplicant")
+  eventsOrganized          Event[]               @relation("EventOrganizer")
+  eventInvitationsSent     EventInvitation[]     @relation("InvitationInviter")
+  eventInvitationsReceived EventInvitation[]     @relation("InvitationInvitee")
+  eventReminders           EventReminder[]
+  calendarSettings         CalendarSettings?
+  profileSettings          ProfileSettings?
+  displaySettings          DisplaySettings?
+  messagesSent             Message[]             @relation("MessageSender")
+  messageStatusesSent      MessageStatus[]       @relation("MessageStatusSender")
+  messageStatusesReceived  MessageStatus[]       @relation("MessageStatusRecipient")
+  notifications            Notification[]
+  pushSubscriptions        PushSubscription[]
+  auditLogs                AuditLog[]
+  expensesCreated          Expense[]             @relation("ExpenseCreator")
+  rolesCreated             Role[]                @relation("RoleCreator")
+  compoundsOwned           Compound[]            @relation("CompoundOwner")
+  compoundsManaged         Compound[]            @relation("CompoundManager")
+  ownerProfile             Owner?                @relation("OwnerProfile")
+  agreementsAsOwner        Agreement[]           @relation("AgreementOwner")
+  communicationsAsClient   ClientCommunication[] @relation("CommunicationClient")
+  communicationsRecorded   ClientCommunication[] @relation("CommunicationAuthor")
+  feedback                 Feedback[]            @relation("FeedbackAuthor")
+  listingInquiriesAssigned ListingInquiry[]      @relation("ListingInquiryAssignee")
+
+  @@index([organizationId])
+  @@index([role])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@index([createdAt(sort: Desc)])
+  @@index([tenantStatus])
+  @@map("users")
+}
+
+model Session {
+  id             String        @id @default(cuid())
+  token          String        @unique
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  expiresAt      DateTime
+  ipAddress      String?
+  userAgent      String?
+  deviceType     String?
+  browser        String?
+  os             String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  // better-auth 1.7 keys an account on (issuer, accountId) rather than
+  // (providerId, accountId): a provider id is app-chosen and could collide
+  // with an OAuth one, an issuer cannot. Local methods use `local:<provider>`,
+  // OAuth providers their real issuer (or `local:oauth:<provider>` when they
+  // publish none). Credential sign-in matches on this exact value, so a row
+  // without it is invisible to the library.
+  issuer                String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@unique([issuer, accountId])
+  @@index([userId])
+  @@map("auth_accounts")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@index([expiresAt])
+  @@map("auth_verifications")
+}
+
+model RateLimit {
+  id          String  @id @default(cuid())
+  key         String?
+  count       Int?
+  lastRequest BigInt?
+
+  @@index([key])
+  @@map("auth_rate_limits")
+}
+
+// ============================================================================
+// ACCESS CONTROL & PEOPLE
+// ============================================================================
+
+model Role {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+  label          String
+  /**
+   * The group's name on an Arabic screen. Optional: a group without one is
+   * called by its label in every language, as it always was.
+   */
+  labelAr        String?
+  description    String
+  permissions    String[]     @default([])
+  isSystem       Boolean      @default(false)
+  isActive       Boolean      @default(true)
+  color          String       @default("outline")
+  createdById    String?
+  createdBy      User?        @relation("RoleCreator", fields: [createdById], references: [id])
+  updatedById    String?
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // Partial unique (org, name) WHERE deleted_at IS NULL added in SQL migration.
+  @@index([organizationId])
+  @@index([isActive, deletedAt])
+  @@index([createdById])
+  @@map("roles")
+}
+
+model Tenant {
+  id                    String       @id @default(cuid())
+  organizationId        String
+  organization          Organization @relation(fields: [organizationId], references: [id])
+  userId                String       @unique
+  user                  User         @relation(fields: [userId], references: [id])
+  /**
+   * "individual" | "company". The scope's tenant record is a party to a
+   * contract, and in this market that party is as often a company as a person
+   * — the lease, the invoice and the owner statement all need to know which.
+   */
+  entityType            String       @default("individual")
+  /**
+   * National ID for an individual, Commercial Registration number for a
+   * company. One column because it is one field on the contract: which of the
+   * two it holds is `entityType`'s job to say.
+   * Stored in the clear, unlike `ssn`: a CR number is public register data
+   * that has to be searchable and printed on the contract.
+   */
+  idNumber              String?
+  dateOfBirth           DateTime?
+  /**
+   * US-style Social Security Number, encrypted at rest. Retained only for the
+   * tenant-screening/application workflow that predates this scope; the
+   * contract path asks for `idNumber` instead and never writes this.
+   */
+  ssn                   String?
+  employmentInfo        Json?
+  emergencyContacts     Json         @default("[]")
+  documents             String[]     @default([])
+  stripeCustomerId      String?
+  creditScore           Int?
+  backgroundCheckStatus String       @default("pending")
+  applicationDate       DateTime     @default(now())
+  moveInDate            DateTime?
+  moveOutDate           DateTime?
+  deletedAt             DateTime?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([stripeCustomerId])
+  @@index([backgroundCheckStatus])
+  @@index([organizationId, idNumber])
+  @@map("tenants")
+}
+
+/**
+ * Owner profile — the details a management office needs about the person or
+ * company whose buildings it manages: how to reach them, how to pay them out,
+ * and what to print on their statement.
+ * Deliberately a PROFILE on a user, mirroring `Tenant`, rather than a
+ * replacement for `Property.ownerId`. Two consequences that matter:
+ * - No migration of existing properties: `Property.ownerId` keeps pointing at
+ * a User exactly as before.
+ * - A row here is OPTIONAL. A landlord who owns and manages their own
+ * buildings is already the owner of record and needs no profile at all;
+ * the owners list is derived from who actually owns properties, and this
+ * table only enriches it. Nothing may require a row here before a property
+ * can have an owner.
+ */
+model Owner {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  userId          String       @unique
+  user            User         @relation("OwnerProfile", fields: [userId], references: [id])
+  /**
+   * Set when the owner is a company rather than an individual.
+   */
+  companyName     String?
+  /**
+   * National ID / commercial registration — printed on statements.
+   */
+  nationalId      String?
+  taxNumber       String?
+  addressStreet   String?
+  addressCity     String?
+  /**
+   * See Property.addressDistrict — printed on the owner's statement.
+   */
+  addressDistrict String?
+  addressCountry  String?
+  /**
+   * Where the office sends this owner's share.
+   */
+  payoutMethod    String?
+  bankName        String?
+  bankAccountName String?
+  bankIban        String?
+  notes           String?
+  isActive        Boolean      @default(true)
+  deletedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, isActive])
+  @@index([deletedAt])
+  @@map("owners")
+}
+
+// ============================================================================
+// PROPERTIES & UNITS (embedded units array → real table)
+// ============================================================================
+
+/**
+ * Selectable categories for properties and units, per organization.
+ * `Property.type` / `Unit.unitType` store this row's `slug`, not its id — the
+ * columns were already free-text strings, so every existing filter, index and
+ * query keeps working and no data migration is needed. This table is what
+ * makes the list *extendable*: the previous hard-coded `PropertyType` enum
+ * could not grow without a code deploy.
+ * Rows are seeded lazily per organization (see `ensureDefaultCategories`), so
+ * organizations created before this table existed get their defaults on first
+ * read rather than in a backfill.
+ */
+model PropertyCategory {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  /**
+   * "property" — a building/unit-of-ownership category; "unit" — a rentable unit type.
+   */
+  kind           String       @default("property")
+  /**
+   * Stable key written to Property.type / Unit.unitType. Immutable once created.
+   */
+  slug           String
+  nameEn         String
+  nameAr         String?
+  description    String?
+  /**
+   * Seeded defaults: renameable and deactivatable, but never deletable.
+   */
+  isSystem       Boolean      @default(false)
+  isActive       Boolean      @default(true)
+  sortOrder      Int          @default(0)
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, kind, slug])
+  @@index([organizationId, kind, isActive, sortOrder])
+  @@index([deletedAt])
+  @@map("property_categories")
+}
+
+/**
+ * A compound / residential complex — a named group of related properties
+ * (buildings, villas, or any lower-level property category).
+ * The relationship is deliberately a plain optional FK on Property rather than
+ * ownership: removing a compound must never cascade into its properties, and
+ * every property-level workflow (contracts, units, payments, reports) runs
+ * exactly the same whether or not the property sits inside one.
+ */
+model Compound {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  name            String
+  /**
+   * Optional short reference code used on statements and reports.
+   */
+  code            String?
+  description     String?
+  addressStreet   String
+  addressCity     String
+  /**
+   * See Property.addressDistrict.
+   */
+  addressDistrict String?
+  addressState    String
+  addressZipCode  String
+  addressCountry  String       @default("Saudi Arabia")
+  totalArea       Float?
+  yearBuilt       Int?
+  amenities       Json         @default("[]")
+  images          String[]     @default([])
+  attachments     Json         @default("[]")
+  ownerId         String?
+  owner           User?        @relation("CompoundOwner", fields: [ownerId], references: [id])
+  managerId       String?
+  manager         User?        @relation("CompoundManager", fields: [managerId], references: [id])
+  notes           String?
+  deletedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  properties Property[]
+  agreements Agreement[]
+
+  @@index([organizationId])
+  @@index([organizationId, name])
+  @@index([ownerId])
+  @@index([managerId])
+  @@index([deletedAt])
+  @@index([createdAt(sort: Desc)])
+  @@map("compounds")
+}
+
+model Property {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  // Optional parent compound / residential complex. A property inside a
+  // compound stays fully independent — its own units, leases, payments and
+  // reports are untouched by the grouping; the compound only rolls them up.
+  compoundId      String?
+  compound        Compound?    @relation(fields: [compoundId], references: [id])
+  name            String
+  description     String?
+  type            String
+  status          String       @default("available") // derived from unit statuses
+  addressStreet   String
+  addressCity     String
+  /**
+   * The neighbourhood an address sits in — حي in Saudi Arabia, where it is
+   * how a property is actually located and is quoted more often than the
+   * postal code. Nullable because every property recorded before this column
+   * existed has none, and because not every market has the tier at all (see
+   * `RegionProfile.address` in lib/regional/region.ts).
+   */
+  addressDistrict String?
+  addressState    String
+  addressZipCode  String
+  /**
+   * Default kept in step by hand with `DEFAULT_COUNTRY` in
+   * lib/regional/region.ts — Prisma cannot import it.
+   */
+  addressCountry  String       @default("Saudi Arabia")
+  yearBuilt       Int?
+  amenities       Json         @default("[]")
+  isMultiUnit     Boolean      @default(false)
+  totalUnits      Int          @default(1)
+  attachments     Json         @default("[]")
+  images          String[]     @default([])
+  ownerId         String
+  owner           User         @relation("PropertyOwner", fields: [ownerId], references: [id])
+  managerId       String?
+  manager         User?        @relation("PropertyManager", fields: [managerId], references: [id])
+  deletedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  units               Unit[]
+  leases              Lease[]
+  applications        Application[]
+  invoices            Invoice[]
+  payments            Payment[]
+  maintenanceRequests MaintenanceRequest[]
+  inspections         Inspection[]
+  expenses            Expense[]
+  securityDeposits    SecurityDeposit[]
+  recurringPayments   RecurringPayment[]
+  paymentReceipts     PaymentReceipt[]
+  agreements          Agreement[]
+  communications      ClientCommunication[]
+  listings            Listing[]
+
+  @@index([organizationId])
+  @@index([compoundId])
+  @@index([ownerId, status])
+  @@index([managerId, status])
+  @@index([status, type])
+  @@index([addressCity])
+  @@index([deletedAt])
+  @@index([createdAt(sort: Desc)])
+  @@map("properties")
+}
+
+model Unit {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  propertyId      String
+  property        Property     @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  unitNumber      String
+  unitType        String       @default("apartment")
+  floor           Int?
+  bedrooms        Float        @default(0)
+  bathrooms       Float        @default(0)
+  squareFootage   Float        @default(0)
+  rentAmount      Decimal      @default(0) @db.Decimal(14, 2)
+  securityDeposit Decimal      @default(0) @db.Decimal(14, 2)
+  status          String       @default("available")
+  features        Json         @default("{}") // balcony/patio/…/appliances/parking/utilities
+  notes           String?
+  images          String[]     @default([])
+  attachments     Json         @default("[]")
+  availableFrom   DateTime?
+  lastRenovated   DateTime?
+  currentTenantId String?
+  currentTenant   User?        @relation("UnitCurrentTenant", fields: [currentTenantId], references: [id])
+  currentLeaseId  String?
+  deletedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  leases           Lease[]
+  securityDeposits SecurityDeposit[]
+  listings         Listing[]
+
+  // Unit numbers are unique per property among NON-DELETED rows only — a
+  // partial unique index in the SQL migration (units_property_unit_number
+  // _active_unique) replaced the total @@unique, which blocked re-creating a
+  // unit number after its predecessor was soft-deleted.
+  @@index([propertyId, unitNumber])
+  @@index([organizationId])
+  @@index([propertyId, status])
+  @@index([currentTenantId])
+  @@map("units")
+}
+
+/**
+ * A communication record — one logged interaction with a client, tenant or
+ * owner alike.
+ * The in-app messaging module already captures what happens INSIDE the
+ * product. This table is for everything that does not: the phone call, the
+ * site visit, the WhatsApp thread, the letter. Without it a client's history
+ * has holes exactly where the important conversations happened.
+ * `clientId` points at the User, not at a tenant or owner profile, so one
+ * person's history stays whole even when they are both — an owner who also
+ * rents a unit is one client with one timeline.
+ */
+/**
+ * Product feedback raised inside a customer organization and answered by the
+ * platform.
+ * It lived in a module-level Map until now, seeded with five hardcoded sample
+ * entries — so every deployment showed the same invented feedback, a restart
+ * erased anything real, and nothing a customer wrote ever reached the platform
+ * operator it was addressed to.
+ * Ownership is split deliberately. The organization owns the submission
+ * (title, description, rating); the platform owns the triage (status,
+ * priority, adminResponse), because whether "bulk payments" is next quarter's
+ * work is a roadmap decision, not a customer's to set.
+ */
+model Feedback {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String
+  user           User         @relation("FeedbackAuthor", fields: [userId], references: [id])
+  /**
+   * The author's system role as it was when they wrote. Stored rather than
+   * joined so a later promotion does not rewrite who said what.
+   */
+  userRole       String
+  category       String
+  /// 1-5, checked in SQL.
+  rating         Int
+  title          String
+  description    String
+  /// The screen or capability the feedback is about, when the author named one.
+  feature        String?
+  // ---- platform-owned triage ----
+  priority       String       @default("medium")
+  status         String       @default("new")
+  tags           String[]     @default([])
+  /// The platform's reply. Shown back to the author.
+  adminResponse  String?
+  respondedAt    DateTime?
+  resolvedAt     DateTime?
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, createdAt])
+  @@index([status, priority])
+  @@index([userId])
+  @@index([deletedAt])
+  @@map("feedback")
+}
+
+model ClientCommunication {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  clientId       String
+  client         User         @relation("CommunicationClient", fields: [clientId], references: [id])
+  /**
+   * call | email | meeting | whatsapp | sms | letter | note
+   */
+  channel        String       @default("note")
+  /**
+   * inbound (they contacted us) | outbound (we contacted them) | internal
+   */
+  direction      String       @default("outbound")
+  subject        String
+  body           String?
+  /**
+   * When the interaction happened — not when it was typed up.
+   */
+  occurredAt     DateTime     @default(now())
+  /**
+   * Optional link to what it was about.
+   */
+  propertyId     String?
+  property       Property?    @relation(fields: [propertyId], references: [id])
+  leaseId        String?
+  lease          Lease?       @relation(fields: [leaseId], references: [id])
+  /**
+   * Set when the record calls for a follow-up that has not happened yet.
+   */
+  followUpAt     DateTime?
+  followUpDone   Boolean      @default(false)
+  recordedById   String?
+  recordedBy     User?        @relation("CommunicationAuthor", fields: [recordedById], references: [id])
+  attachments    Json         @default("[]")
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([clientId, occurredAt(sort: Desc)])
+  @@index([organizationId, followUpAt])
+  @@index([propertyId])
+  @@index([deletedAt])
+  @@map("client_communications")
+}
+
+/// An SMS or WhatsApp message an office sent or tried to send, and what the
+/// provider reported back (migration 20261004113500_messaging). Blocked sends
+/// are logged too — opted out, no number, over quota, no template — so an
+/// office can see why a tenant was not reached. Written by
+/// src/lib/messaging/dispatch.ts; delivery reports move `status` forward.
+model MessageLog {
+  id                String    @id @default(cuid())
+  organizationId    String
+  /// sms | whatsapp
+  channel           String
+  /// unifonic | taqnyat | msegat | twilio | meta
+  provider          String
+  /// office (its own account) | platform (Super Admin default) | env
+  gatewaySource     String
+  /// payment_reminder | payment_overdue | payment_receipt | lease_expiry |
+  /// maintenance_update | maintenance_emergency; null for manual and test sends
+  event             String?
+  /// automation | manual | test
+  purpose           String    @default("automation")
+  /// sent | delivered | read | failed | undelivered | blocked
+  status            String
+  /// opted_out | no_phone | quota_exceeded | no_template
+  blockReason       String?
+  recipientUserId   String?
+  recipientName     String?
+  toNumber          String?
+  body              String    @default("")
+  templateName      String?
+  providerMessageId String?
+  error             String?
+  /// Accepted by the platform's gateway: counts toward the package quota.
+  countsTowardQuota Boolean   @default(false)
+  sentById          String?
+  communicationId   String?
+  statusUpdatedAt   DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([organizationId, countsTowardQuota, createdAt])
+  @@index([provider, providerMessageId])
+  @@map("message_logs")
+}
+
+// ============================================================================
+// AGREEMENTS (owner ↔ management office)
+// ============================================================================
+
+/**
+ * A management agreement: the contract between a property owner and the
+ * management office, and the basis on which the office earns its commission.
+ * Distinct from a `Lease`, which is between the office/owner and a TENANT.
+ * A lease says what the tenant pays; this says what the office keeps.
+ * SCOPE — an agreement applies to, in order of precedence:
+ * 1. one property   (propertyId set)
+ * 2. one compound   (compoundId set) — every property inside it
+ * 3. every property the owner holds (neither set) — a blanket agreement
+ * Most specific wins, so a blanket 5% can be overridden for one building
+ * without unpicking it. See `resolveAgreementForProperty`.
+ */
+model Agreement {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  /**
+   * "management" today. The scope also names *investment* agreements in the
+   * archive categories without ever defining them; this discriminator lets
+   * one be added later without a migration.
+   */
+  kind              String       @default("management")
+  /**
+   * Office reference for the signed paper. Unique per organization when set.
+   */
+  agreementNumber   String?
+  ownerId           String
+  owner             User         @relation("AgreementOwner", fields: [ownerId], references: [id])
+  propertyId        String?
+  property          Property?    @relation(fields: [propertyId], references: [id])
+  compoundId        String?
+  compound          Compound?    @relation(fields: [compoundId], references: [id])
+  /**
+   * "percentage" | "fixed" — the two the scope requires.
+   */
+  feeType           String       @default("percentage")
+  /**
+   * Percent of rent, e.g. 5.000 for 5%. Used when feeType = percentage.
+   */
+  feePercentage     Decimal      @default(0) @db.Decimal(6, 3)
+  /**
+   * Flat fee per `feeFrequency`. Used when feeType = fixed.
+   */
+  feeAmount         Decimal      @default(0) @db.Decimal(14, 2)
+  /**
+   * monthly | quarterly | semi_annual | annual — cadence of a fixed fee.
+   */
+  feeFrequency      String       @default("monthly")
+  /**
+   * Whether commission is earned on rent COLLECTED or rent BILLED.
+   * Defaults to collected: the office earns as money actually arrives, which
+   * is both the common arrangement and what the owner statement reports.
+   */
+  commissionBasis   String       @default("collected")
+  currency          String       @default("SAR")
+  startDate         DateTime
+  endDate           DateTime?
+  status            String       @default("active") // draft | active | expired | terminated
+  notes             String?
+  documents         String[]     @default([])
+  terminatedDate    DateTime?
+  terminationReason String?
+  createdById       String?
+  deletedAt         DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([ownerId, status])
+  @@index([propertyId, status])
+  @@index([compoundId, status])
+  @@index([organizationId, agreementNumber])
+  @@index([deletedAt])
+  @@index([createdAt(sort: Desc)])
+  @@map("agreements")
+}
+
+// ============================================================================
+// LEASING
+// ============================================================================
+
+model Lease {
+  id                    String       @id @default(cuid())
+  organizationId        String
+  organization          Organization @relation(fields: [organizationId], references: [id])
+  propertyId            String
+  property              Property     @relation(fields: [propertyId], references: [id])
+  unitId                String
+  unit                  Unit         @relation(fields: [unitId], references: [id])
+  tenantId              String
+  tenant                User         @relation("LeaseTenant", fields: [tenantId], references: [id])
+  startDate             DateTime
+  endDate               DateTime
+  status                String       @default("draft")
+  paymentStatus         String       @default("pending")
+  // Lease money as REAL columns — authoritative, queryable, exact. These
+  // previously lived only inside the `terms` JSON: untyped JS floats with no
+  // currency, unqueryable for rent rolls/MRR. The write paths keep the JSON
+  // mirror in sync for legacy readers; new code should read the columns.
+  rentAmount            Decimal      @default(0) @db.Decimal(14, 2)
+  /**
+   * The rent for the whole term, when the contract states one figure for it
+   * ("12,000") rather than an amount per installment. The schedule splits it
+   * equally across the installments, remainder on the last, and `rentAmount`
+   * holds the regular share. Null — every contract that predates the column —
+   * means the contract is priced per installment.
+   */
+  contractAmount        Decimal?     @db.Decimal(14, 2)
+  securityDepositAmount Decimal      @default(0) @db.Decimal(14, 2)
+  currency              String       @default("SAR")
+  /**
+   * Electronic Contract Number — the authority reference for the lease (Ejar
+   * in Saudi Arabia). Optional because historical leases predate it, unique
+   * per organization when set.
+   */
+  contractNumber        String?
+  /**
+   * How often an installment falls due: monthly | quarterly | four_monthly |
+   * semi_annual | annual. A real column rather than a key inside `terms`
+   * because the installment generator and the leasing reports both filter on
+   * it.
+   */
+  paymentFrequency      String       @default("monthly")
+  /**
+   * Optional utility charges billed WITH the rent, per installment — not once
+   * for the whole term. Same unit as `rentAmount`, so a quarterly contract
+   * charging 300 electricity means 300 every quarter.
+   * Real columns rather than keys in `terms` for the same reason rent is: the
+   * installment generator and the owner statement both have to read them, and
+   * a prorated final period has to shrink them along with the rent.
+   * Note `terms.utilities` is a different thing entirely — it lists which
+   * utilities are INCLUDED in the rent; these are amounts charged on top.
+   */
+  electricityAmount     Decimal      @default(0) @db.Decimal(14, 2)
+  waterAmount           Decimal      @default(0) @db.Decimal(14, 2)
+  /**
+   * Tax is per contract, not per organization: one office holds both
+   * VAT-bearing and exempt contracts. `taxRate` is a percentage (15 = 15%)
+   * and applies only while `taxEnabled` is true.
+   */
+  taxEnabled            Boolean      @default(false)
+  taxRate               Decimal      @default(0) @db.Decimal(6, 3)
+  terms                 Json // lateFee/utilities/restrictions/paymentConfig (+ legacy rentAmount/securityDeposit mirror)
+  documents             String[]     @default([])
+  signedDate            DateTime?
+  renewalOptions        Json         @default("{\"available\":false}")
+  signedById            String?
+  signatureData         String?
+  signatureIpAddress    String?
+  terminatedDate        DateTime?
+  terminatedById        String?
+  terminationReason     String?
+  terminationNotice     String?
+  renewedLeaseId        String?
+  parentLeaseId         String?
+  notes                 String?
+  deletedAt             DateTime?
+  archivedAt            DateTime?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  invoices          Invoice[]
+  payments          Payment[]
+  recurringPayments RecurringPayment[]
+  securityDeposits  SecurityDeposit[]
+  communications    ClientCommunication[]
+
+  // Partial unique (unit_id) WHERE status='active' AND deleted_at IS NULL
+  // added in the SQL migration (leases_one_active_per_unit) — the database
+  // itself forbids two concurrent active leases on one unit.
+  @@index([organizationId])
+  @@index([propertyId, status])
+  @@index([tenantId, status])
+  @@index([unitId, status])
+  @@index([status, endDate])
+  @@index([deletedAt])
+  @@index([organizationId, contractNumber])
+  @@map("leases")
+}
+
+model Application {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  propertyId        String
+  property          Property     @relation(fields: [propertyId], references: [id])
+  applicantId       String
+  applicant         User         @relation("ApplicationApplicant", fields: [applicantId], references: [id])
+  status            String       @default("draft")
+  applicationFee    Json         @default("{}")
+  personalInfo      Json         @default("{}")
+  employmentInfo    Json?
+  emergencyContacts Json         @default("[]")
+  previousAddresses Json         @default("[]")
+  documents         Json         @default("[]")
+  additionalInfo    Json         @default("{}")
+  submittedAt       DateTime?
+  reviewedAt        DateTime?
+  reviewedById      String?
+  reviewNotes       String?
+  deletedAt         DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([propertyId, status])
+  @@index([applicantId])
+  @@index([status, submittedAt])
+  @@map("applications")
+}
+
+/**
+ * A property advertisement: one unit, offered for rent or for sale, on the
+ * office's public page (/o/{organization.slug}/{slug}). The Marketing →
+ * Listings screens manage it; the public pages read only the columns named in
+ * lib/listings/public-visibility.ts, and only while it is published, its
+ * licence has not run out and its unit is still available.
+ *
+ * What the ad says about the flat itself — rooms, area, floor — is read from
+ * the unit when the page is drawn, so it cannot go stale. What is the ad's own
+ * lives here: the title and description in both languages, the price and what
+ * it is per, the photos (none stored means "use the unit's, then the
+ * building's"), the amenities, the contact numbers and the REGA advertising
+ * licence.
+ *
+ * An office can also advertise a property it has not added to the system (a
+ * client's flat it markets, a sale it brokers). That listing names no unit and
+ * no building — both or neither, never one — and carries what they would have
+ * said itself: the type, the area, the rooms, the floor and an address line.
+ *
+ * The database holds the rules a page relies on: a slug that is safe in a URL
+ * and unique inside the office, one live (not archived) ad per unit and type,
+ * and a published row that carries a licence number and its expiry.
+ */
+model Listing {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  /**
+   * Both null for a property not in the system (see above).
+   */
+  propertyId      String?
+  property        Property?    @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  unitId          String?
+  unit            Unit?        @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  /**
+   * rent | sale
+   */
+  type            String       @default("rent")
+  /**
+   * The ad's address under the office's page; made once, unique per office.
+   */
+  slug            String
+  titleAr         String       @default("")
+  titleEn         String       @default("")
+  descriptionAr   String?
+  descriptionEn   String?
+  price           Decimal      @default(0) @db.Decimal(14, 2)
+  currency        String       @default("SAR")
+  /**
+   * monthly | quarterly | semi_annual | annual for a rent; total for a sale.
+   */
+  pricePeriod     String       @default("monthly")
+  /**
+   * Empty means the unit's photos, then the building's. A listing with no
+   * unit has only its own.
+   */
+  photos          String[]     @default([])
+  amenities       String[]     @default([])
+  city            String?
+  district        String?
+  /**
+   * A property not in the system says itself what a unit would: its type (a
+   * unit category slug, as Unit.unitType), an address line (the office's own
+   * note of where it is; the public page shows the district and city, as it
+   * does for a unit), the area in m², the rooms and the floor. Null on a
+   * listing made from a unit.
+   * No defaults on purpose: a default is sent with every insert, which breaks
+   * creating a listing on a database the migration has not reached yet.
+   */
+  propertyType    String?
+  addressLine     String?
+  areaSqm         Float?
+  bedrooms        Int?
+  bathrooms       Int?
+  floor           Int?
+  contactPhone    String?
+  whatsappNumber  String?
+  /**
+   * The REGA advertising licence (رقم ترخيص الإعلان) and the day it runs out.
+   * Both are required to publish; once the day has passed the ad is hidden.
+   */
+  adLicenceNumber String?
+  adLicenceExpiry DateTime?    @db.Date
+  /**
+   * draft | published | archived
+   */
+  status          String       @default("draft")
+  publishedAt     DateTime?
+  createdById     String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  inquiries       ListingInquiry[]
+
+  // Unique (organizationId, slug) and the partial one-live-ad-per-unit-and-type
+  // index are in the SQL migration (listings_org_slug_key,
+  // listings_unit_type_live_unique).
+  @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([unitId])
+  @@index([propertyId])
+  @@map("listings")
+}
+
+/**
+ * A message from the public page of a listing — someone who wants to see the
+ * flat. The office's inbox (Marketing → Inquiries) works them: new, contacted,
+ * closed, with an assignee and the office's own notes.
+ *
+ * Written by the public inquiry route under an explicit bypass (the visitor
+ * has no organization), keyed on the listing's own organization. The visitor's
+ * address is kept only as a keyed hash, enough to see that one source is
+ * flooding a listing and not enough to say who it is.
+ */
+model ListingInquiry {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  listingId      String
+  listing        Listing      @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  name           String
+  phone          String
+  email          String?
+  message        String?
+  /**
+   * new | contacted | closed
+   */
+  status         String       @default("new")
+  assigneeId     String?
+  assignee       User?        @relation("ListingInquiryAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  notes          String?
+  sourceIpHash   String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, status, createdAt(sort: Desc)])
+  @@index([listingId])
+  @@index([assigneeId])
+  @@map("listing_inquiries")
+}
+
+model InvitationToken {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  email          String
+  token          String       @unique
+  type           String
+  userId         String?
+  newEmail       String?
+  tenantData     Json?
+  invitedById    String
+  expiresAt      DateTime
+  usedAt         DateTime?
+  isUsed         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([email, type])
+  @@index([expiresAt])
+  @@map("invitation_tokens")
+}
+
+// ============================================================================
+// FINANCE
+// ============================================================================
+
+model Invoice {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  invoiceNumber      String
+  // Null on an invoice to an owner or to a customer who is not a tenant
+  // (customerType below); every installment and every older invoice has one.
+  tenantId           String?
+  tenant             User?        @relation("InvoiceTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  // Null when the invoice is for no one building (a customer's service).
+  propertyId         String?
+  property           Property?    @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  leaseId            String?
+  lease              Lease?       @relation(fields: [leaseId], references: [id])
+  unitId             String?
+  category           String
+  issueDate          DateTime
+  dueDate            DateTime
+  // First day of the billing period this invoice covers, set by the invoice
+  // generators. Backs the partial unique (leaseId, category, periodStart) —
+  // one generated invoice per lease per period, so re-running generation
+  // cannot double-bill. Manual one-off invoices may leave it null.
+  periodStart        DateTime?
+  status             String       @default("scheduled")
+  currency           String       @default("SAR")
+  subtotal           Decimal      @db.Decimal(14, 2)
+  taxAmount          Decimal      @default(0) @db.Decimal(14, 2)
+  discountAmount     Decimal      @default(0) @db.Decimal(14, 2)
+  totalAmount        Decimal      @db.Decimal(14, 2)
+  amountPaid         Decimal      @default(0) @db.Decimal(14, 2)
+  balanceRemaining   Decimal      @default(0) @db.Decimal(14, 2)
+  lineItems          Json         @default("[]")
+  paymentIds         String[]     @default([])
+  lastPaymentDate    DateTime?
+  lateFeeAmount      Decimal      @default(0) @db.Decimal(14, 2)
+  lateFeeAppliedDate DateTime?
+  gracePeriodEnd     DateTime?
+  emailSent          Boolean      @default(false)
+  emailSentDate      DateTime?
+  remindersSent      Json         @default("[]")
+  pdfPath            String?
+  pdfGenerated       Boolean      @default(false)
+  notes              String?
+  metadata           Json         @default("{}")
+  // ---- Accounting phase 0 (migration 20261004121500_accounting_phase0) ----
+  // Left out of every read by the client (src/lib/db/prisma.ts) so a page
+  // that does not show them works before the migration; the invoice screens
+  // ask for them (src/lib/invoice/phase0-columns.ts).
+  /// invoice | credit_note. A credit note's amounts are stored negative, so
+  /// a sum over invoices is what was invoiced net of credits. NOT NULL
+  /// DEFAULT 'invoice' in the database; optional and without a default here,
+  /// because Prisma writes a default into every insert, and an insert naming
+  /// a column the database does not have yet fails.
+  documentType       String?
+  /// The invoice a credit note corrects.
+  originalInvoiceId  String?
+  originalInvoice    Invoice?     @relation("InvoiceCreditNotes", fields: [originalInvoiceId], references: [id], onDelete: Restrict)
+  /// On an invoice: what its credit notes took off it (positive). NOT NULL
+  /// DEFAULT 0 in the database (see documentType).
+  creditedAmount     Decimal?     @db.Decimal(14, 2)
+  /// tenant | owner | customer; null on an installment or an older invoice
+  /// (a tenant's).
+  customerType       String?
+  /// The owner billed, when customerType is owner.
+  customerUserId     String?
+  customerUser       User?        @relation("InvoiceCustomer", fields: [customerUserId], references: [id], onDelete: Restrict)
+  /// The buyer as printed on the tax invoice, kept as issued.
+  customerName       String?
+  customerVatNumber  String?
+  customerAddress    String?
+  deletedAt          DateTime?
+  version            Int          @default(0) // optimistic concurrency (see Payment.version)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  payments    Payment[]
+  lines       InvoiceLine[]
+  creditNotes Invoice[]     @relation("InvoiceCreditNotes")
+
+  // Partial unique (lease_id, category, period_start) WHERE all three are
+  // non-null AND deleted_at IS NULL added in the SQL migration
+  // (invoices_period_per_lease_unique) — generation idempotency.
+  @@unique([organizationId, invoiceNumber])
+  @@index([tenantId, status, dueDate])
+  @@index([propertyId, status, dueDate])
+  @@index([leaseId, dueDate])
+  @@index([status, dueDate])
+  @@index([deletedAt])
+  @@index([originalInvoiceId])
+  @@index([customerUserId])
+  @@map("invoices")
+}
+
+/**
+ * One line of an invoice written line by line — a custom invoice or a credit
+ * note — with its own VAT treatment (migration 20261004121500_accounting_phase0).
+ * The invoice's `lineItems` JSON keeps a copy for the screens and documents
+ * that read it; these rows are what the VAT summary adds up.
+ *
+ * Amounts: net = quantity × unitPrice − discount (the invoice's discount,
+ * spread over its lines before VAT); vatAmount = net × vatRate %; total =
+ * net + vatAmount. Negative on a credit note, like the invoice's own totals.
+ */
+model InvoiceLine {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  invoiceId      String
+  invoice        Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  position       Int          @default(0)
+  description    String
+  /// The charge (InvoiceType): rent, management_fee, maintenance, ...
+  category       String?
+  quantity       Decimal      @default(1) @db.Decimal(14, 3)
+  unitPrice      Decimal      @db.Decimal(14, 2)
+  discountAmount Decimal      @default(0) @db.Decimal(14, 2)
+  netAmount      Decimal      @db.Decimal(14, 2)
+  /// S standard | Z zero-rated | E exempt | O out of scope — the ledger's
+  /// VAT codes (src/lib/accounting/types.ts).
+  vatCategory    String
+  /// Percent (15 = 15%); 0 unless the line is standard-rated.
+  vatRate        Decimal      @default(0) @db.Decimal(6, 3)
+  vatAmount      Decimal      @default(0) @db.Decimal(14, 2)
+  totalAmount    Decimal      @db.Decimal(14, 2)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+model Payment {
+  id                      String       @id @default(cuid())
+  organizationId          String
+  organization            Organization @relation(fields: [organizationId], references: [id])
+  tenantId                String
+  tenant                  User         @relation("PaymentTenant", fields: [tenantId], references: [id])
+  propertyId              String
+  property                Property     @relation(fields: [propertyId], references: [id])
+  leaseId                 String?
+  lease                   Lease?       @relation(fields: [leaseId], references: [id])
+  invoiceId               String?
+  invoice                 Invoice?     @relation(fields: [invoiceId], references: [id])
+  amount                  Decimal      @db.Decimal(14, 2)
+  amountPaid              Decimal      @default(0) @db.Decimal(14, 2)
+  // ISO-4217 code the amount is denominated in, locked at the moment of
+  // charge. Organizations collect with their own gateway account and may bill
+  // in different currencies; without this the amount is a bare number whose
+  // meaning changes whenever an admin edits the org currency setting.
+  currency                String       @default("SAR")
+  type                    String
+  status                  String       @default("pending")
+  paymentMethod           String?
+  dueDate                 DateTime
+  paidDate                DateTime?
+  // The member of staff who recorded the money. Null for a payment taken
+  // online (the gateway recorded it) and for rows older than this column.
+  recordedById            String?
+  recordedBy              User?        @relation("PaymentRecorder", fields: [recordedById], references: [id])
+  // The payment number, which is also its receipt voucher number (سند قبض):
+  // sequential per organization, handed out by the database (trigger
+  // payments_assign_number) when money is received, and kept for good. The
+  // application never writes it, and reads leave it out unless they ask for
+  // it — see src/lib/db/prisma.ts and src/lib/payments/receipt-number.ts.
+  number                  Int?
+  // The gateway that took (or is taking) the money, and its reference there:
+  // the checkout's at first, the payment's own once paid — what a refund
+  // names. One pair for every gateway (stripe, paypal, moyasar, paytabs,
+  // tap); the Stripe/PayPal columns below are the history it was backfilled
+  // from. Read only where asked for — see src/lib/db/prisma.ts and
+  // src/lib/payments/gateway-columns.ts.
+  gatewayProvider         String?
+  gatewayPaymentId        String?
+  stripePaymentIntentId   String?      @unique
+  stripeCheckoutSessionId String?      @unique
+  stripePaymentMethodId   String?
+  stripeCustomerId        String?
+  paypalOrderId           String?
+  paypalCaptureId         String?
+  razorpayOrderId         String?
+  razorpayPaymentId       String?
+  paystackReference       String?
+  description             String?
+  notes                   String?
+  receiptUrl              String?
+  allocations             Json         @default("[]")
+  schedule                Json?
+  parentPaymentId         String?
+  isRecurring             Boolean      @default(false)
+  lateFeeConfig           Json?
+  lateFeeApplied          Decimal      @default(0) @db.Decimal(14, 2)
+  lateFeeDate             DateTime?
+  prorationData           Json?
+  remindersSent           Json         @default("[]")
+  statusHistory           Json         @default("[]")
+  paymentHistory          Json         @default("[]")
+  deletedAt               DateTime?
+  version                 Int          @default(0) // optimistic concurrency
+  lastSyncedAt            DateTime     @default(now())
+  syncStatus              String       @default("synced")
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+
+  receipt PaymentReceipt?
+
+  // Partial uniques added in SQL migrations:
+  //  - (lease_id, type, due_date) WHERE type='rent' — generator/webhook dedupe
+  //  - (lease_id, type) WHERE type IN ('security_deposit','pet_deposit') —
+  //    one deposit charge per lease (payments_deposit_per_lease_unique)
+  //  - (parent_payment_id) WHERE type='late_fee' — one late fee per parent
+  //    payment (payments_late_fee_per_parent_unique)
+  @@index([organizationId])
+  @@index([tenantId, status, dueDate])
+  @@index([propertyId, status, createdAt(sort: Desc)])
+  @@index([status, dueDate])
+  @@index([invoiceId])
+  @@index([leaseId])
+  @@index([recordedById])
+  @@index([paypalOrderId])
+  @@index([razorpayOrderId])
+  @@index([paystackReference])
+  @@index([type, status])
+  @@unique([organizationId, number])
+  @@unique([gatewayProvider, gatewayPaymentId])
+  @@map("payments")
+}
+
+// The last payment number each organization has handed out. Written only by
+// the payments_assign_number trigger and by
+// src/scripts/backfill-payment-numbers.ts (migration
+// 20261003100001_payment_numbers). `ready` is false until the backfill has
+// numbered an organization's older payments.
+model PaymentNumberCounter {
+  organizationId String   @id
+  lastNumber     Int      @default(0)
+  ready          Boolean  @default(true)
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  @@map("payment_number_counters")
+}
+
+model PaymentReceipt {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  paymentId      String       @unique
+  payment        Payment      @relation(fields: [paymentId], references: [id])
+  tenantId       String
+  tenant         User         @relation("ReceiptTenant", fields: [tenantId], references: [id])
+  propertyId     String
+  property       Property     @relation(fields: [propertyId], references: [id])
+  receiptNumber  String
+  amount         Decimal      @db.Decimal(14, 2)
+  paymentMethod  String
+  transactionId  String?
+  paidDate       DateTime
+  description    String
+  receiptData    Json         @default("{}")
+  pdfPath        String?
+  emailSent      Boolean      @default(false)
+  emailSentDate  DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, receiptNumber])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([propertyId])
+  @@map("payment_receipts")
+}
+
+model PaymentNotification {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  tenantId       String
+  tenant         User         @relation("PaymentNotificationTenant", fields: [tenantId], references: [id])
+  paymentId      String
+  type           String
+  status         String       @default("pending")
+  scheduledDate  DateTime
+  sentDate       DateTime?
+  emailAddress   String
+  subject        String
+  message        String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([paymentId])
+  @@index([status, scheduledDate])
+  @@map("payment_notifications")
+}
+
+model RecurringPayment {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  organization         Organization @relation(fields: [organizationId], references: [id])
+  tenantId             String
+  tenant               User         @relation("RecurringPaymentTenant", fields: [tenantId], references: [id])
+  propertyId           String
+  property             Property     @relation(fields: [propertyId], references: [id])
+  leaseId              String
+  lease                Lease        @relation(fields: [leaseId], references: [id])
+  amount               Decimal      @db.Decimal(14, 2)
+  // ISO-4217 code — this row is the TEMPLATE that generates payments, so its
+  // amount must carry its own currency (see Payment.currency).
+  currency             String       @default("SAR")
+  type                 String       @default("rent")
+  frequency            String
+  startDate            DateTime     @default(now())
+  endDate              DateTime?
+  nextPaymentDate      DateTime
+  isActive             Boolean      @default(true)
+  description          String?
+  stripeSubscriptionId String?
+  stripeCustomerId     String?
+  paymentMethodId      String?
+  dayOfMonth           Int?
+  dayOfWeek            Int?
+  lastPaymentDate      DateTime?
+  totalPaymentsMade    Int          @default(0)
+  failedPaymentCount   Int          @default(0)
+  metadata             Json         @default("{}")
+  deletedAt            DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([tenantId, isActive])
+  @@index([leaseId])
+  @@index([nextPaymentDate, isActive])
+  @@map("recurring_payments")
+}
+
+model SecurityDeposit {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  leaseId            String
+  lease              Lease        @relation(fields: [leaseId], references: [id])
+  tenantId           String
+  tenant             User         @relation("SecurityDepositTenant", fields: [tenantId], references: [id])
+  propertyId         String
+  property           Property     @relation(fields: [propertyId], references: [id])
+  unitId             String
+  unit               Unit         @relation(fields: [unitId], references: [id])
+  amount             Decimal      @db.Decimal(14, 2)
+  // ISO-4217 code the deposit is held in — deposits live for years, and a
+  // bare number changes meaning if the org currency setting changes.
+  currency           String       @default("SAR")
+  status             String       @default("pending")
+  collectedDate      DateTime?
+  collectedPaymentId String?
+  deductions         Json         @default("[]")
+  refundAmount       Decimal?     @db.Decimal(14, 2)
+  refundDate         DateTime?
+  refundMethod       String?
+  refundPaymentId    String?
+  refundNotes        String?
+  notes              String?
+  deletedAt          DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([leaseId, tenantId])
+  @@index([unitId])
+  @@index([propertyId])
+  @@index([status])
+  @@map("security_deposits")
+}
+
+model Expense {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  expenseNumber   String?
+  propertyId      String?
+  property        Property?    @relation(fields: [propertyId], references: [id])
+  unitId          String?
+  category        String
+  description     String
+  amount          Decimal      @db.Decimal(14, 2)
+  currency        String       @default("SAR")
+  date            DateTime
+  paymentMethod   String?
+  referenceNumber String?
+  receiptUrl      String?
+  notes           String?
+  isRecurring     Boolean      @default(false)
+  recurringConfig Json?
+  status          String       @default("paid")
+  taxDeductible   Boolean      @default(false)
+  // ---- Accounting phase 0 (migration 20261004121500_accounting_phase0) ----
+  // Left out of every read by the client until asked for, as on Invoice.
+  /// The VAT inside `amount` (amount is what was paid, VAT included). NOT
+  /// NULL DEFAULT 0 in the database; no default here, as on Invoice.
+  vatAmount             Decimal?  @db.Decimal(14, 2)
+  /// S | Z | E | O, as on an invoice line; null when not recorded.
+  vatCategory           String?
+  supplierId            String?
+  supplier              Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  /// The supplier's own invoice number.
+  supplierInvoiceNumber String?
+  createdById     String
+  createdBy       User         @relation("ExpenseCreator", fields: [createdById], references: [id])
+  deletedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([organizationId, expenseNumber])
+  @@index([propertyId, date(sort: Desc)])
+  @@index([category, status])
+  @@index([createdById, date(sort: Desc)])
+  @@index([supplierId])
+  @@map("expenses")
+}
+
+/**
+ * Someone the office buys from (migration 20261004121500_accounting_phase0):
+ * the minimum an expense needs to name its supplier and claim its VAT. The
+ * purchases module (migration 20261004190000_purchases) adds the contact, the
+ * bank details to pay into and the payment terms; the supplier's balance is
+ * not stored but read from the books (the party's lines on the suppliers'
+ * payable account).
+ */
+model Supplier {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+  vatNumber      String?
+  phone          String?
+  isActive       Boolean      @default(true)
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  // ---- Purchases (migration 20261004190000_purchases) ----
+  // Left out of every read by the client (src/lib/db/prisma.ts) so a page that
+  // does not show them works before the migration; the purchases screens ask
+  // for them (src/lib/accounting/purchases/availability.ts).
+  contactName      String?
+  email            String?
+  address          String?
+  city             String?
+  /// Commercial registration number.
+  crNumber         String?
+  bankName         String?
+  iban             String?
+  /// Days from a bill's date to when it falls due; null: due on its date.
+  paymentTermsDays Int?
+  notes            String?
+
+  expenses Expense[]
+  bills    PurchaseBill[]
+  vouchers PaymentVoucher[]
+
+  @@index([organizationId])
+  @@index([organizationId, name])
+  @@map("suppliers")
+}
+
+/**
+ * A supplier's invoice to the office (migration 20261004190000_purchases).
+ * Entered `pending`, approved by someone holding the right, then owed: the
+ * ledger posts it on `billDate` once approved (Dr the lines' accounts and
+ * input VAT / Cr suppliers' payable, src/lib/accounting/posting/purchase.ts).
+ * `partially_paid` and `paid` follow the vouchers allocated to it
+ * (`amountPaid` is kept equal to the sum of its allocations on vouchers not
+ * cancelled); `cancelled` posts nothing. Numbered in sequence per
+ * organization (BILL-000123). The same supplier's invoice number is entered
+ * once among bills not cancelled — a partial unique index in the migration.
+ */
+model PurchaseBill {
+  id                    String       @id @default(cuid())
+  organizationId        String
+  organization          Organization @relation(fields: [organizationId], references: [id])
+  number                Int
+  supplierId            String
+  supplier              Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  /// The supplier's own number for the invoice.
+  supplierInvoiceNumber String?
+  /// Calendar days (midnight UTC), as the ledger's entries are.
+  billDate              DateTime
+  dueDate               DateTime
+  /// pending | approved | partially_paid | paid | cancelled
+  status                String       @default("pending")
+  currency              String       @default("SAR")
+  /// The lines' value before the discount.
+  subtotal              Decimal      @db.Decimal(14, 2)
+  /// Taken before VAT, spread over the lines.
+  discountAmount        Decimal      @default(0) @db.Decimal(14, 2)
+  vatAmount             Decimal      @default(0) @db.Decimal(14, 2)
+  totalAmount           Decimal      @db.Decimal(14, 2)
+  amountPaid            Decimal      @default(0) @db.Decimal(14, 2)
+  notes                 String?
+  approvedById          String?
+  approvedAt            DateTime?
+  cancelledById         String?
+  cancelledAt           DateTime?
+  cancelReason          String?
+  createdById           String?
+  version               Int          @default(0) // optimistic concurrency (see Payment.version)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  lines       PurchaseBillLine[]
+  allocations PaymentVoucherAllocation[]
+
+  // Partial unique (organizationId, supplierId, supplierInvoiceNumber) WHERE
+  // the number is not null AND status <> 'cancelled' is in the SQL migration
+  // (purchase_bills_supplier_invoice_unique).
+  @@unique([organizationId, number])
+  @@index([organizationId, billDate])
+  @@index([organizationId, supplierId, status])
+  @@index([organizationId, status, dueDate])
+  @@map("purchase_bills")
+}
+
+/**
+ * One line of a purchase bill: what was bought, the ledger account it is
+ * charged to, its own VAT treatment, and the building and unit it belongs to
+ * (the cost centre, plain columns as on a journal line). Amounts as on an
+ * invoice line: net = quantity × unitPrice − the line's share of the bill's
+ * discount; vatAmount = net × vatRate %; total = net + vatAmount.
+ */
+model PurchaseBillLine {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  billId         String
+  bill           PurchaseBill  @relation(fields: [billId], references: [id], onDelete: Cascade)
+  position       Int           @default(0)
+  description    String
+  accountId      String
+  account        LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  quantity       Decimal       @default(1) @db.Decimal(14, 3)
+  unitPrice      Decimal       @db.Decimal(14, 2)
+  discountAmount Decimal       @default(0) @db.Decimal(14, 2)
+  netAmount      Decimal       @db.Decimal(14, 2)
+  /// S standard | Z zero-rated | E exempt | O out of scope — the ledger's
+  /// VAT codes (src/lib/accounting/types.ts).
+  vatCategory    String
+  /// Percent (15 = 15%); 0 unless the line is standard-rated.
+  vatRate        Decimal       @default(0) @db.Decimal(6, 3)
+  vatAmount      Decimal       @default(0) @db.Decimal(14, 2)
+  totalAmount    Decimal       @db.Decimal(14, 2)
+  propertyId     String?
+  unitId         String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+  @@index([billId])
+  @@index([accountId])
+  @@map("purchase_bill_lines")
+}
+
+/**
+ * Money the office paid out — a payment voucher (سند صرف), numbered in
+ * sequence per organization (PV-000045) and drawn on one of its bank or cash
+ * accounts. The ledger posts it on `voucherDate` (Dr suppliers' payable /
+ * Cr the account). Its allocations say which bills it paid; what is left
+ * over is on account with the supplier. Cancelling it keeps the number and
+ * releases the bills.
+ */
+model PaymentVoucher {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  number         Int
+  supplierId     String
+  supplier       Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  voucherDate    DateTime
+  bankAccountId  String
+  bankAccount    BankAccount  @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  amount         Decimal      @db.Decimal(14, 2)
+  currency       String       @default("SAR")
+  /// cash | bank_transfer | cheque | card | other
+  method         String       @default("bank_transfer")
+  /// The cheque or transfer number.
+  reference      String?
+  notes          String?
+  /// posted | cancelled
+  status         String       @default("posted")
+  cancelledById  String?
+  cancelledAt    DateTime?
+  cancelReason   String?
+  createdById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  allocations PaymentVoucherAllocation[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, voucherDate])
+  @@index([organizationId, supplierId, status])
+  @@index([bankAccountId])
+  @@map("payment_vouchers")
+}
+
+/** How much of a voucher paid a bill. One per voucher and bill. */
+model PaymentVoucherAllocation {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  voucherId      String
+  voucher        PaymentVoucher @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  billId         String
+  bill           PurchaseBill   @relation(fields: [billId], references: [id], onDelete: Restrict)
+  amount         Decimal        @db.Decimal(14, 2)
+  createdAt      DateTime       @default(now())
+
+  @@unique([voucherId, billId])
+  @@index([billId])
+  @@index([organizationId])
+  @@map("payment_voucher_allocations")
+}
+
+// ============================================================================
+// LEDGER — the office's double-entry books (migration 20261003170001_ledger)
+// ============================================================================
+
+/**
+ * One account of the office's chart of accounts.
+ * Seeded per organization from the Saudi template (src/lib/accounting/
+ * coa-template.ts) when accounting is set up, then the office's to shape:
+ * add, rename, renumber, move, deactivate. Only `postable` accounts take
+ * journal lines; the rest are headings. An account with lines is never
+ * deleted (the journal_lines foreign key refuses it), and one a posting rule
+ * uses — `systemKey` set, or reached through AccountingSettings.accountMap —
+ * is protected by src/lib/accounting/coa-rules.ts.
+ */
+model LedgerAccount {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  code           String
+  nameAr         String
+  nameEn         String
+  /**
+   * asset | liability | equity | income | expense
+   */
+  type           String
+  /**
+   * debit | credit — the side its balance ordinarily sits on.
+   */
+  normalSide     String
+  parentId       String?
+  parent         LedgerAccount?  @relation("LedgerAccountTree", fields: [parentId], references: [id])
+  children       LedgerAccount[] @relation("LedgerAccountTree")
+  postable       Boolean         @default(true)
+  /**
+   * The posting job the template created this account for (cash_on_hand,
+   * owner_payable, …) — see src/lib/accounting/system-keys.ts. Unique per
+   * organization when set.
+   */
+  systemKey      String?
+  active         Boolean         @default(true)
+  description    String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  lines        JournalLine[]
+  bankAccounts BankAccount[]
+  billLines    PurchaseBillLine[]
+
+  @@unique([organizationId, code])
+  @@unique([organizationId, systemKey])
+  @@index([organizationId, parentId])
+  @@map("ledger_accounts")
+}
+
+/**
+ * A journal entry. Numbered in sequence per organization, dated by calendar
+ * day (midnight UTC). An entry posted from a document of the app carries the
+ * document as `sourceType` + `sourceId`, and only one such entry is live per
+ * document at a time (partial unique index journal_entries_live_source_unique
+ * in the migration); a changed document replaces its entry while the period
+ * is open and is reversed and reposted once it is closed
+ * (src/lib/accounting/periods.ts). Nothing is deleted once its period is
+ * closed: a reversal is a new entry pointing back at `reversesId`, and the
+ * original is marked reversed. A deferred trigger refuses any entry whose
+ * lines do not balance.
+ */
+model JournalEntry {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  number         Int
+  date           DateTime
+  /**
+   * manual | opening_balance | invoice | payment | payment_refund | expense |
+   * deposit_receipt | deposit_settlement | bank_transfer | owner_settlement |
+   * owner_payout
+   */
+  sourceType     String
+  sourceId       String?
+  /**
+   * What the screens show for the source — an invoice or payment number.
+   */
+  sourceRef      String?
+  memo           String?
+  /**
+   * posted | reversed
+   */
+  status         String         @default("posted")
+  reversesId     String?
+  reverses       JournalEntry?  @relation("JournalReversal", fields: [reversesId], references: [id])
+  reversedBy     JournalEntry[] @relation("JournalReversal")
+  /**
+   * Total of the debits (= total of the credits), kept equal by the trigger.
+   */
+  totalAmount    Decimal        @db.Decimal(14, 2)
+  currency       String         @default("SAR")
+  /**
+   * Digest of what the source called for when it was posted — reposting an
+   * unchanged document is then a no-op.
+   */
+  fingerprint    String?
+  createdById    String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  lines JournalLine[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, date])
+  @@index([organizationId, sourceType, sourceId])
+  @@index([reversesId])
+  @@map("journal_entries")
+}
+
+/**
+ * One line of a journal entry: a debit or a credit to one account, with the
+ * party whose sub-ledger it belongs to (a tenant's receivable, an owner's
+ * payable) and the building, unit, contract and agreement it concerns. The
+ * dimension ids are plain columns, not foreign keys: the books outlive the
+ * records they describe. `date` repeats the entry's date for the reports'
+ * indexes; the trigger keeps the two equal.
+ */
+model JournalLine {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  entryId        String
+  entry          JournalEntry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  lineNo         Int           @default(0)
+  accountId      String
+  account        LedgerAccount @relation(fields: [accountId], references: [id])
+  date           DateTime
+  debit          Decimal       @default(0) @db.Decimal(14, 2)
+  credit         Decimal       @default(0) @db.Decimal(14, 2)
+  /**
+   * tenant | owner | supplier | customer
+   */
+  partyType      String?
+  partyId        String?
+  propertyId     String?
+  unitId         String?
+  leaseId        String?
+  agreementId    String?
+  /**
+   * S standard | Z zero-rated | E exempt | O out of scope.
+   */
+  vatCode        String?
+  memo           String?
+  createdAt      DateTime      @default(now())
+
+  /// Set once the line is ticked off against the bank statement.
+  reconciliation BankReconciledLine?
+
+  @@index([entryId])
+  @@index([organizationId, accountId, date])
+  @@index([organizationId, partyType, partyId])
+  @@index([organizationId, propertyId])
+  @@map("journal_lines")
+}
+
+/**
+ * How an organization keeps its books: from when (`cutOverDate` — documents
+ * dated before it are not posted; opening balances carry them), closed
+ * through when (`closedThrough` — the period lock), VAT registration, who
+ * holds tenants' deposits on owners' buildings, and which account does each
+ * posting job (`accountMap`, system key → LedgerAccount id). One row per
+ * organization, created by "set up accounting"; `lastJournalNumber` is the
+ * journal number counter, locked by every posting transaction.
+ */
+model AccountingSettings {
+  id                String       @id @default(cuid())
+  organizationId    String       @unique
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  cutOverDate       DateTime?
+  closedThrough     DateTime?
+  vatRegistered     Boolean      @default(false)
+  vatNumber         String?
+  /**
+   * accrual — the only basis today.
+   */
+  basis             String       @default("accrual")
+  /**
+   * owner | office — who holds a tenant's deposit on an owner's building.
+   */
+  depositHolder     String       @default("owner")
+  accountMap        Json         @default("{}")
+  lastJournalNumber Int          @default(0)
+  templateVersion   String?
+  setupAt           DateTime?
+  setupById         String?
+  lastSweepAt       DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@map("accounting_settings")
+}
+
+/**
+ * A bank, cash, POS or gateway account of the office, kept in one postable
+ * ledger account each.
+ */
+model BankAccount {
+  id              String         @id @default(cuid())
+  organizationId  String
+  organization    Organization   @relation(fields: [organizationId], references: [id])
+  ledgerAccountId String         @unique
+  ledgerAccount   LedgerAccount  @relation(fields: [ledgerAccountId], references: [id])
+  /**
+   * bank | cash | pos | gateway_clearing
+   */
+  kind            String         @default("bank")
+  name            String
+  bankName        String?
+  iban            String?
+  accountNumber   String?
+  currency        String         @default("SAR")
+  active          Boolean        @default(true)
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  transfersOut BankTransfer[] @relation("BankTransferFrom")
+  transfersIn  BankTransfer[] @relation("BankTransferTo")
+  payouts      OwnerPayout[]
+  vouchers     PaymentVoucher[]
+  reconciled   BankReconciledLine[]
+
+  @@index([organizationId, kind])
+  @@map("bank_accounts")
+}
+
+/**
+ * Money moved between two of the office's own accounts.
+ */
+model BankTransfer {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  fromBankAccountId String
+  fromBankAccount   BankAccount  @relation("BankTransferFrom", fields: [fromBankAccountId], references: [id])
+  toBankAccountId   String
+  toBankAccount     BankAccount  @relation("BankTransferTo", fields: [toBankAccountId], references: [id])
+  amount            Decimal      @db.Decimal(14, 2)
+  date              DateTime
+  reference         String?
+  memo              String?
+  /**
+   * posted | reversed
+   */
+  status            String       @default("posted")
+  journalEntryId    String?
+  createdById       String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([organizationId, date])
+  @@map("bank_transfers")
+}
+
+/**
+ * An owner's period, settled: the figures of their statement for it, and the
+ * entry that took the office's commission (and the VAT on it) out of the
+ * owner's payable and credited any investment rent. `ownerId` is the owner's
+ * User id — a plain column, so the books survive the archive.
+ */
+model OwnerSettlement {
+  id                  String       @id @default(cuid())
+  organizationId      String
+  organization        Organization @relation(fields: [organizationId], references: [id])
+  ownerId             String
+  agreementId         String?
+  periodStart         DateTime
+  periodEnd           DateTime
+  collected           Decimal      @default(0) @db.Decimal(14, 2)
+  ownerReceivedDirect Decimal      @default(0) @db.Decimal(14, 2)
+  commission          Decimal      @default(0) @db.Decimal(14, 2)
+  commissionVat       Decimal      @default(0) @db.Decimal(14, 2)
+  expenses            Decimal      @default(0) @db.Decimal(14, 2)
+  investmentRent      Decimal      @default(0) @db.Decimal(14, 2)
+  /**
+   * What the period leaves the office owing the owner (negative: the owner
+   * owing the office).
+   */
+  netDue              Decimal      @default(0) @db.Decimal(14, 2)
+  currency            String       @default("SAR")
+  /**
+   * closed | reversed
+   */
+  status              String       @default("closed")
+  journalEntryId      String?
+  notes               String?
+  createdById         String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([organizationId, ownerId, periodStart])
+  @@map("owner_settlements")
+}
+
+/**
+ * Money paid to an owner out of what the office holds for them.
+ */
+model OwnerPayout {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  ownerId        String
+  amount         Decimal      @db.Decimal(14, 2)
+  date           DateTime
+  bankAccountId  String
+  bankAccount    BankAccount  @relation(fields: [bankAccountId], references: [id])
+  reference      String?
+  notes          String?
+  /**
+   * posted | reversed
+   */
+  status         String       @default("posted")
+  journalEntryId String?
+  createdById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, ownerId, date])
+  @@map("owner_payouts")
+}
+
+/**
+ * A line of a bank or cash account ticked off against the bank's statement
+ * (migration 20261004190000_purchases). Kept apart from journal_lines, which
+ * the closed-period guard locks: a line in a closed period can still be
+ * reconciled. The tick goes with the line when its document's entry is
+ * replaced in an open period; the new line then waits to be ticked again.
+ */
+model BankReconciledLine {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  bankAccountId  String
+  bankAccount    BankAccount  @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  journalLineId  String       @unique
+  journalLine    JournalLine  @relation(fields: [journalLineId], references: [id], onDelete: Cascade)
+  /// The day the bank cleared it (a calendar day, midnight UTC).
+  reconciledOn   DateTime
+  createdById    String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, bankAccountId])
+  @@map("bank_reconciled_lines")
+}
+
+// ============================================================================
+// OPERATIONS
+// ============================================================================
+
+model MaintenanceRequest {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  propertyId     String
+  property       Property     @relation(fields: [propertyId], references: [id])
+  unitId         String?
+  tenantId       String
+  tenant         User         @relation("MaintenanceTenant", fields: [tenantId], references: [id])
+  assignedToId   String?
+  assignedTo     User?        @relation("MaintenanceAssignee", fields: [assignedToId], references: [id])
+  title          String
+  description    String
+  priority       String       @default("medium")
+  status         String       @default("submitted")
+  category       String
+  contactPhone   String?
+  images         String[]     @default([])
+  estimatedCost  Decimal?     @db.Decimal(14, 2)
+  actualCost     Decimal?     @db.Decimal(14, 2)
+  scheduledDate  DateTime?
+  completedDate  DateTime?
+  notes          String?
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  workOrders WorkOrder[]
+
+  @@index([organizationId])
+  @@index([propertyId, status])
+  @@index([tenantId, status])
+  @@index([assignedToId, status])
+  @@index([status, priority])
+  @@index([createdAt(sort: Desc)])
+  @@map("maintenance_requests")
+}
+
+model WorkOrder {
+  id                   String             @id @default(cuid())
+  organizationId       String
+  organization         Organization       @relation(fields: [organizationId], references: [id])
+  maintenanceRequestId String
+  maintenanceRequest   MaintenanceRequest @relation(fields: [maintenanceRequestId], references: [id])
+  assignedToId         String
+  assignedTo           User               @relation("WorkOrderAssignee", fields: [assignedToId], references: [id])
+  title                String
+  description          String
+  status               String             @default("pending")
+  priority             String             @default("medium")
+  estimatedCost        Decimal?           @db.Decimal(14, 2)
+  actualCost           Decimal?           @db.Decimal(14, 2)
+  scheduledDate        DateTime?
+  completedDate        DateTime?
+  notes                String?
+  materials            String[]           @default([])
+  laborHours           Float?
+  deletedAt            DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([organizationId])
+  @@index([maintenanceRequestId, status])
+  @@index([assignedToId, status])
+  @@index([scheduledDate, status])
+  @@map("work_orders")
+}
+
+model Ticket {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  ticketNumber    String?
+  tenantId        String
+  tenant          User         @relation("TicketTenant", fields: [tenantId], references: [id])
+  propertyId      String?
+  unitId          String?
+  assignedToId    String?
+  assignedTo      User?        @relation("TicketAssignee", fields: [assignedToId], references: [id])
+  createdByUserId String
+  createdByRole   String
+  title           String
+  description     String
+  category        String
+  priority        String       @default("medium")
+  status          String       @default("open")
+  attachments     String[]     @default([])
+  comments        Json         @default("[]")
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([organizationId, ticketNumber])
+  @@index([tenantId, status])
+  @@index([status, priority])
+  @@index([assignedToId, status])
+  @@index([createdAt(sort: Desc)])
+  @@map("tickets")
+}
+
+model Inspection {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  propertyId         String
+  property           Property     @relation(fields: [propertyId], references: [id])
+  tenantId           String?
+  leaseId            String?
+  type               String
+  status             String       @default("scheduled")
+  scheduledDate      DateTime
+  completedDate      DateTime?
+  inspectorId        String
+  inspector          User         @relation("InspectionInspector", fields: [inspectorId], references: [id])
+  items              Json         @default("[]")
+  overallCondition   String?
+  tenantSignature    Json?
+  inspectorSignature Json?
+  photos             String[]     @default([])
+  notes              String?
+  deletedAt          DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([propertyId, type])
+  @@index([status, scheduledDate])
+  @@index([inspectorId])
+  @@map("inspections")
+}
+
+model Document {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  name              String
+  description       String?
+  type              String       @default("other")
+  category          String       @default("general")
+  fileUrl           String
+  fileSize          Float
+  mimeType          String
+  uploadedById      String
+  uploadedBy        User         @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  tenantId          String?
+  propertyId        String?
+  leaseId           String?
+  sharedWith        String[]     @default([])
+  tags              String[]     @default([])
+  status            String       @default("active")
+  isRequired        Boolean      @default(false)
+  expiresAt         DateTime?
+  r2ObjectKey       String?
+  downloadCount     Int          @default(0)
+  lastDownloadedAt  DateTime?
+  uploadedAt        DateTime     @default(now())
+  versions          Json         @default("[]")
+  currentVersion    Int          @default(1)
+  digitalSignatures Json         @default("[]")
+  requiresSignature Boolean      @default(false)
+  signatureDeadline DateTime?
+  accessLogs        Json         @default("[]")
+  sharing           Json         @default("{}")
+  templateId        String?
+  isTemplate        Boolean      @default(false)
+  autoGenerated     Boolean      @default(false)
+  parentDocumentId  String?
+  metadata          Json         @default("{}")
+  encryption        Json         @default("{}")
+  compliance        Json         @default("{}")
+  deletedAt         DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([uploadedById, createdAt(sort: Desc)])
+  @@index([tenantId, type])
+  @@index([propertyId, category])
+  @@index([leaseId])
+  @@index([type, status])
+  @@map("documents")
+}
+
+model DocumentTemplate {
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  name             String
+  description      String?
+  category         String       @default("other")
+  type             String
+  version          String       @default("1.0.0")
+  content          String
+  sections         Json         @default("[]")
+  variables        Json         @default("[]")
+  styles           Json         @default("{}")
+  outputFormat     String       @default("pdf")
+  autoGenerate     Boolean      @default(false)
+  generateTriggers String[]     @default([])
+  createdById      String
+  isPublic         Boolean      @default(false)
+  allowedRoles     String[]     @default([])
+  usageCount       Int          @default(0)
+  lastUsed         DateTime?
+  status           String       @default("draft")
+  deletedAt        DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([category, status])
+  @@index([createdById, status])
+  @@map("document_templates")
+}
+
+// ============================================================================
+// MESSAGING
+// ============================================================================
+
+model Conversation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String?
+  description    String?
+  type           String // individual | group | announcement
+  participants   Json         @default("[]") // detailed participant records
+  participantIds String[]     @default([]) // active participant user ids (queryable)
+  createdById    String
+  propertyId     String?
+  lastMessage    Json?
+  settings       Json         @default("{}")
+  avatar         String?
+  isArchived     Boolean      @default(false)
+  isPinned       Boolean      @default(false)
+  tags           String[]     @default([])
+  metadata       Json         @default("{}")
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  messages        Message[]
+  messageStatuses MessageStatus[]
+
+  @@index([organizationId])
+  @@index([participantIds], type: Gin)
+  @@index([type, createdAt(sort: Desc)])
+  @@index([createdById])
+  @@map("conversations")
+}
+
+model Message {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id])
+  senderId        String
+  sender          User         @relation("MessageSender", fields: [senderId], references: [id])
+  recipientId     String?
+  propertyId      String?
+  subject         String?
+  content         String
+  messageType     String       @default("general")
+  priority        String       @default("normal")
+  status          String       @default("sent")
+  attachments     Json         @default("[]")
+  readAt          DateTime?
+  deliveredAt     DateTime?
+  readBy          Json         @default("[]")
+  replyToId       String?
+  forwardedFromId String?
+  isSystemMessage Boolean      @default(false)
+  isEdited        Boolean      @default(false)
+  editedAt        DateTime?
+  editHistory     Json         @default("[]")
+  mentions        String[]     @default([])
+  metadata        Json?
+  deletedAt       DateTime?
+  deletedById     String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  statuses MessageStatus[]
+
+  @@index([organizationId])
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([senderId, createdAt(sort: Desc)])
+  @@index([recipientId, status])
+  @@map("messages")
+}
+
+model MessageStatus {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  messageId      String
+  // Status rows die with their message/conversation — without these FKs a
+  // hard delete orphaned per-recipient status rows forever.
+  message        Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation("MessageStatusSender", fields: [senderId], references: [id])
+  recipientId    String
+  recipient      User         @relation("MessageStatusRecipient", fields: [recipientId], references: [id])
+  status         String       @default("sent")
+  deliveredAt    DateTime?
+  readAt         DateTime?
+  failureReason  String?
+  reactions      Json         @default("[]")
+  isEdited       Boolean      @default(false)
+  editedAt       DateTime?
+  isDeleted      Boolean      @default(false)
+  deletedAt      DateTime?
+  deletedById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([messageId, recipientId])
+  @@index([organizationId])
+  @@index([conversationId, status])
+  @@index([recipientId, status, createdAt(sort: Desc)])
+  @@index([senderId])
+  @@map("message_statuses")
+}
+
+// Typing indicators and online presence live in the Redis-backed realtime
+// bus (src/lib/realtime/bus.ts); their former tables were dropped.
+
+// ============================================================================
+// CALENDAR
+// ============================================================================
+
+model Event {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  organization         Organization @relation(fields: [organizationId], references: [id])
+  title                String
+  description          String?
+  type                 String
+  status               String       @default("scheduled")
+  priority             String       @default("medium")
+  startDate            DateTime
+  endDate              DateTime
+  allDay               Boolean      @default(false)
+  timezone             String       @default("UTC")
+  location             Json?
+  propertyId           String?
+  unitNumber           String?
+  organizerId          String
+  organizer            User         @relation("EventOrganizer", fields: [organizerId], references: [id])
+  attendees            Json         @default("[]")
+  attendeeIds          String[]     @default([])
+  tenantId             String?
+  leaseId              String?
+  maintenanceRequestId String?
+  recurrence           Json?
+  parentEventId        String?
+  isRecurring          Boolean      @default(false)
+  reminders            Json         @default("[]")
+  metadata             Json         @default("{}")
+  attachments          String[]     @default([])
+  notes                String?
+  createdById          String
+  updatedById          String?
+  deletedAt            DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  invitations  EventInvitation[]
+  reminderRows EventReminder[]
+
+  @@index([organizationId])
+  @@index([startDate, endDate])
+  @@index([organizerId, startDate])
+  @@index([propertyId, startDate])
+  @@index([attendeeIds], type: Gin)
+  @@map("events")
+}
+
+model EventInvitation {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  eventId            String
+  event              Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  inviterId          String
+  inviter            User         @relation("InvitationInviter", fields: [inviterId], references: [id])
+  inviteeId          String?
+  invitee            User?        @relation("InvitationInvitee", fields: [inviteeId], references: [id])
+  inviteeEmail       String
+  inviteeName        String
+  invitationToken    String       @unique
+  status             String       @default("pending")
+  respondedAt        DateTime?
+  responseMessage    String?
+  invitationSentAt   DateTime     @default(now())
+  remindersSent      Int          @default(0)
+  lastReminderSentAt DateTime?
+  metadata           Json         @default("{}")
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@unique([eventId, inviteeEmail])
+  @@index([organizationId])
+  @@index([inviteeId])
+  @@index([inviterId])
+  @@index([status])
+  @@map("event_invitations")
+}
+
+model EventReminder {
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  eventId          String
+  event            Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId           String
+  user             User         @relation(fields: [userId], references: [id])
+  type             String       @default("email")
+  minutesBefore    Int
+  scheduledFor     DateTime
+  sent             Boolean      @default(false)
+  sentAt           DateTime?
+  deliveryStatus   String       @default("pending")
+  deliveryAttempts Int          @default(0)
+  lastAttemptAt    DateTime?
+  errorMessage     String?
+  customMessage    String?
+  template         String       @default("default")
+  metadata         Json         @default("{}")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@unique([eventId, userId, minutesBefore])
+  @@index([organizationId])
+  @@index([scheduledFor, sent])
+  @@map("event_reminders")
+}
+
+model CalendarSettings {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String       @unique
+  user           User         @relation(fields: [userId], references: [id])
+  settings       Json         @default("{}") // defaultView/businessHours/eventColors/integrations/…
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@map("calendar_settings")
+}
+
+// ============================================================================
+// ENGAGEMENT & AUDIT
+// ============================================================================
+
+model Announcement {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  title          String
+  content        String
+  priority       String       @default("normal")
+  type           String       @default("general")
+  targetAudience Json         @default("{}")
+  publishedAt    DateTime?
+  scheduledFor   DateTime?
+  expiresAt      DateTime?
+  attachments    Json         @default("[]")
+  actionButton   Json?
+  views          Json         @default("[]")
+  reactions      Json         @default("[]")
+  status         String       @default("draft")
+  isSticky       Boolean      @default(false)
+  allowComments  Boolean      @default(true)
+  createdById    String
+  updatedById    String?
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([status, publishedAt(sort: Desc)])
+  @@index([isSticky(sort: Desc), publishedAt(sort: Desc)])
+  @@map("announcements")
+}
+
+model Notification {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  title          String
+  message        String
+  type           String       @default("system")
+  priority       String       @default("normal")
+  read           Boolean      @default(false)
+  readAt         DateTime?
+  actionUrl      String?
+  metadata       Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([userId, read, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model PushSubscription {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  endpoint       String       @unique // web: push endpoint URL · native: the FCM device token
+  p256dh         String? // web-push VAPID keys — null for native tokens
+  auth           String?
+  userAgent      String?
+  platform       String       @default("web") // web | ios | android — mobile-ready
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+model AuditLog {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  category        String
+  action          String
+  severity        String       @default("low")
+  userId          String?
+  user            User?        @relation(fields: [userId], references: [id])
+  userEmail       String?
+  userRole        String?
+  // The actor's name when they acted: the entry keeps naming them after a
+  // rename, and after their user row is deleted (userId goes null).
+  userName        String?
+  impersonatedBy  String?
+  resourceType    String?
+  resourceId      String?
+  resourceName    String?
+  description     String
+  // Catalogue key + parameters the sentence is rendered from, in the reader's
+  // language (src/lib/audit/render.ts). `description` is the English fallback.
+  messageKey      String?
+  messageParams   Json?
+  details         Json?
+  oldValues       Json?
+  newValues       Json?
+  ipAddress       String?
+  userAgent       String?
+  requestId       String?
+  sessionId       String?
+  timestamp       DateTime     @default(now())
+  source          String       @default("web")
+  tags            String[]     @default([])
+  retentionDate   DateTime?
+  complianceFlags String[]     @default([])
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([organizationId, timestamp(sort: Desc)])
+  @@index([userId, timestamp(sort: Desc)])
+  @@index([category, timestamp(sort: Desc)])
+  @@index([severity, timestamp(sort: Desc)])
+  @@index([resourceType, resourceId, timestamp(sort: Desc)])
+  @@index([timestamp(sort: Desc)])
+  @@index([action, timestamp(sort: Desc)])
+  @@index([organizationId, userId, timestamp(sort: Desc)])
+  @@map("audit_logs")
+}
+
+model PropertyStatusAuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  propertyId     String
+  propertyName   String
+  eventType      String
+  oldStatus      String?
+  newStatus      String
+  triggeredBy    String
+  triggerSource  String
+  unitChanges    Json         @default("[]")
+  metadata       Json         @default("{}")
+  timestamp      DateTime     @default(now())
+  userId         String?
+  sessionId      String?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([propertyId, timestamp(sort: Desc)])
+  @@index([eventType, timestamp(sort: Desc)])
+  @@map("property_status_audit_logs")
+}
+
+// ============================================================================
+// SETTINGS (post-consolidation: 3 org/user settings tables)
+// ============================================================================
+
+model SystemSettings {
+  id              String       @id @default(cuid())
+  organizationId  String       @unique // one settings document per organization
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  branding        Json         @default("{}")
+  email           Json         @default("{}")
+  payment         Json         @default("{}")
+  paymentGateways Json         @default("{}")
+  security        Json         @default("{}")
+  maintenance     Json         @default("{}")
+  integrations    Json         @default("{}")
+  application     Json         @default("{}")
+  notifications   Json         @default("{}")
+  backup          Json         @default("{}")
+  isActive        Boolean      @default(true)
+  version         Int          @default(1)
+  createdById     String?
+  updatedById     String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@map("system_settings")
+}
+
+model ProfileSettings {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String       @unique
+  user           User         @relation(fields: [userId], references: [id])
+  profile        Json         @default("{}") // names/contact/social/emergency/preferences
+  isActive       Boolean      @default(true)
+  version        Int          @default(1)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@map("profile_settings")
+}
+
+model DisplaySettings {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String       @unique
+  user           User         @relation(fields: [userId], references: [id])
+  theme          String       @default("system")
+  language       String       @default("ar")
+  timezone       String       @default("Asia/Riyadh")
+  currency       String       @default("SAR")
+  dateFormat     String       @default("DD/MM/YYYY")
+  timeFormat     String       @default("12h")
+  contrast       Boolean      @default(false)
+  compact        Boolean      @default(false)
+  rtl            Boolean      @default(false)
+  navColor       String       @default("integrate")
+  preferences    Json         @default("{}") // fonts/density/colorScheme/dashboard/tables/charts/accessibility
+  branding       Json         @default("{}") // org logos/colors/company info (+ r2 asset metadata)
+  customCSS      String?
+  isActive       Boolean      @default(true)
+  version        Int          @default(1)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@map("display_settings")
+}

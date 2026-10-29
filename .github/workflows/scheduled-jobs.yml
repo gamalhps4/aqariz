@@ -1,0 +1,78 @@
+# Fallback scheduler — OFF unless you configure it.
+#
+# This deployment runs on a VPS managed by Dokploy, which has its own
+# Schedules feature; that is the intended scheduler and this workflow is a
+# backup for anyone running the project elsewhere. It stays dormant until both
+# secrets below exist, so it never spams failed runs at a repo that isn't
+# using it.
+#
+# To enable, add two repository secrets:
+#   APP_BASE_URL  e.g. https://app.example.com   (no trailing slash)
+#   CRON_SECRET   the same value as the app's CRON_SECRET env var
+#
+# Enable exactly ONE scheduler. Running this alongside Dokploy schedules (or
+# vercel.json crons) fires every job twice.
+name: Scheduled jobs
+
+on:
+  schedule:
+    # Times are UTC. The jobs do not depend on each other's order.
+    - cron: "0 1 * * *"   # invoice-status
+    - cron: "0 8 * * *"   # payment-reminders
+    - cron: "15 8 * * *"  # lease-expiry-notices
+    - cron: "0 2 * * *"   # check-leases
+    - cron: "0 3 * * *"   # billing
+    - cron: "0 4 * * 0"   # cleanup (weekly)
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Job to run on demand
+        required: true
+        type: choice
+        options:
+          - invoice-status
+          - payment-reminders
+          - lease-expiry-notices
+          - check-leases
+          - billing
+          - cleanup
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # Dormant until configured. Without this the scheduled runs would fail
+    # daily on a repo whose deployment schedules its jobs elsewhere.
+    if: vars.ENABLE_GITHUB_CRON == 'true'
+    steps:
+      - name: Resolve job for this trigger
+        id: resolve
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 1 * * *")  job=invoice-status ;;
+            "0 8 * * *")  job=payment-reminders ;;
+            "15 8 * * *") job=lease-expiry-notices ;;
+            "0 2 * * *")  job=check-leases ;;
+            "0 3 * * *")  job=billing ;;
+            "0 4 * * 0")  job=cleanup ;;
+            *)            job="${{ inputs.job }}" ;;
+          esac
+          echo "job=$job" >> "$GITHUB_OUTPUT"
+
+      - name: Call cron endpoint
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_BASE_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "APP_BASE_URL / CRON_SECRET are not set — nothing to call."
+            echo "See docs/scheduled-jobs.md; on Dokploy use its Schedules tab."
+            exit 1
+          fi
+          job="${{ steps.resolve.outputs.job }}"
+          echo "Running $job"
+          # --fail-with-body surfaces the API's error payload in the log instead
+          # of a bare exit code, and a non-2xx fails the workflow run.
+          curl --fail-with-body --silent --show-error --max-time 300 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_BASE_URL}/api/cron/${job}"

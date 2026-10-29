@@ -1,0 +1,90 @@
+# Continuous integration.
+#
+# Deliberately does NOT run `tsc --noEmit` as a gate: the repo carries a known
+# baseline of ~224 pre-existing UI type errors (see next.config.ts
+# `ignoreBuildErrors`), so a bare typecheck would be red on every commit and
+# stop meaning anything. `next build` still runs, which catches the errors that
+# actually break the app.
+#
+# `pnpm lint` gates on errors only. It had been calling `next lint`, which
+# Next 16 removed, so the step failed on a missing command rather than on
+# anything in the code — the gate has not actually run since that upgrade. It
+# now calls the ESLint CLI. The React Compiler rule set is demoted to warnings
+# in eslint.config.mjs for the same reason as the typecheck above; see the
+# note there.
+name: CI
+
+on:
+  push:
+    branches: [main, saas-version]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: propertypro_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/propertypro_ci
+      BETTER_AUTH_SECRET: ci-secret-not-used-for-anything-real
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        # Node's own runner via tsx — no test framework dependency. Covers the
+        # money arithmetic and the pure rules behind it.
+        run: pnpm test
+
+      - name: Translation parity
+        run: pnpm verify:i18n
+
+      - name: SaaS route boundaries
+        # Static check that every API route carries an auth wrapper.
+        run: pnpm verify:saas-boundaries
+
+      - name: Apply migrations
+        run: pnpm db:deploy
+
+      - name: Tenant isolation
+        # Executable RLS spec — the check that matters most in a multi-tenant app.
+        run: pnpm verify:isolation
+
+      - name: Build
+        run: pnpm build

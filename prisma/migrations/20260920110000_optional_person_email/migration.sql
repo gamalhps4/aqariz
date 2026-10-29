@@ -1,0 +1,26 @@
+-- A person's record and a login account are not the same thing.
+--
+-- `users.email` was NOT NULL because the table began life as the login table:
+-- sign-in resolves by email, so every row needed one. But the same table also
+-- holds owners and tenants, who are parties to a contract first and may never
+-- sign in at all. In this market an owner is commonly identified by a phone
+-- number and a commercial registration number, and an office that has no
+-- email address for them had no way to record them — which is exactly what
+-- the client review asked to fix, for both owners and tenants.
+--
+-- Dropping the constraint is all that is required:
+--
+--   * The UNIQUE index stays. In PostgreSQL a unique index permits any number
+--     of NULLs, so two owners recorded without an address do not collide,
+--     while two owners sharing a real address still do.
+--   * Sign-in is unaffected. Better Auth has `disableSignUp: true` here and
+--     never writes a user row; it only reads by email, and a NULL never
+--     matches, so a row without an address simply cannot log in. That is the
+--     intended behaviour, not a gap.
+--   * Credentials live on Better Auth's `accounts` table keyed by user id,
+--     not on this table, so a row with no address simply has no credential.
+--
+-- No backfill and no data change: every existing row keeps its address, and
+-- this only permits new rows that have none.
+
+ALTER TABLE "users" ALTER COLUMN "email" DROP NOT NULL;

@@ -1,0 +1,42 @@
+-- AlterTable
+ALTER TABLE "expenses" ALTER COLUMN "amount" SET DATA TYPE DECIMAL(14,2);
+
+-- AlterTable
+ALTER TABLE "invoices" ALTER COLUMN "subtotal" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "taxAmount" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "discountAmount" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "totalAmount" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "amountPaid" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "balanceRemaining" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "lateFeeAmount" SET DATA TYPE DECIMAL(14,2);
+
+-- AlterTable
+ALTER TABLE "maintenance_requests" ALTER COLUMN "estimatedCost" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "actualCost" SET DATA TYPE DECIMAL(14,2);
+
+-- AlterTable
+ALTER TABLE "payment_receipts" ALTER COLUMN "amount" SET DATA TYPE DECIMAL(14,2);
+
+-- AlterTable
+ALTER TABLE "payments" ALTER COLUMN "amount" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "amountPaid" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "lateFeeApplied" SET DATA TYPE DECIMAL(14,2);
+
+-- AlterTable
+ALTER TABLE "plans" ALTER COLUMN "monthlyPrice" SET DATA TYPE DECIMAL(14,2);
+
+-- AlterTable
+ALTER TABLE "recurring_payments" ALTER COLUMN "amount" SET DATA TYPE DECIMAL(14,2);
+
+-- AlterTable
+ALTER TABLE "security_deposits" ALTER COLUMN "amount" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "refundAmount" SET DATA TYPE DECIMAL(14,2);
+
+-- AlterTable
+ALTER TABLE "units" ALTER COLUMN "rentAmount" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "securityDeposit" SET DATA TYPE DECIMAL(14,2);
+
+-- AlterTable
+ALTER TABLE "work_orders" ALTER COLUMN "estimatedCost" SET DATA TYPE DECIMAL(14,2),
+ALTER COLUMN "actualCost" SET DATA TYPE DECIMAL(14,2);
+

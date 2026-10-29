@@ -1,0 +1,23 @@
+packages:
+  - "packages/*"
+
+allowBuilds:
+  # postinstall is only a funding banner — nothing to build
+  core-js: false
+  # downloads/links the platform-specific native binary
+  esbuild: true
+  # builds or verifies the libvips native binding (Next.js image optimization)
+  sharp: true
+  # links the napi binary used by the eslint import resolver
+  unrs-resolver: true
+  # prisma CLI downloads its schema-engine binary; the client is Rust-free (v7)
+  prisma: true
+  "@prisma/engines": true
+
+overrides:
+  # exceljs pulls uuid@8 transitively, which carries a moderate advisory
+  # (missing buffer bounds check in v3/v5/v6 when `buf` is passed). exceljs
+  # only ever calls uuidv4() with no buffer, so it is not reachable — but
+  # pinning a patched line removes the finding from `pnpm audit` rather than
+  # leaving a permanent explanation next to it.
+  uuid: "^11.1.1"

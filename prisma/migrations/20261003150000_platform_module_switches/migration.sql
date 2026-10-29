@@ -1,0 +1,11 @@
+-- Platform-wide module switches (Super Admin → Packages).
+--
+-- { "disabled": ["<module key>", ...] }: modules switched off for every
+-- package at once, on top of what each package includes. Nullable with no
+-- default: NULL means every module is on, which is also how the code reads
+-- the column before this migration has been applied.
+--
+-- platform_settings already carries FORCE ROW LEVEL SECURITY with the
+-- read_all / platform_write policies (20260818130955_init), which cover the
+-- new column; nothing to add there.
+ALTER TABLE "platform_settings" ADD COLUMN IF NOT EXISTS "modules" JSONB;

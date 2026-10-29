@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lease Invoice</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Arial", sans-serif;
+        line-height: 1.6;
+        color: #333;
+        background: white;
+      }
+
+      .invoice-container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+        background: white;
+      }
+
+      /* Header */
+      .invoice-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 20px;
+        padding-bottom: 12px;
+        border-bottom: 2px solid #4f46e5;
+      }
+
+      .company-info {
+        flex: 1;
+      }
+
+      .company-logo {
+        width: 45px;
+        height: 45px;
+        background: linear-gradient(135deg, #4f46e5, #7c3aed);
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+        font-size: 18px;
+        margin-bottom: 8px;
+      }
+
+      .company-name {
+        font-size: 18px;
+        font-weight: bold;
+        color: #1f2937;
+        margin-bottom: 3px;
+      }
+
+      .company-address {
+        color: #6b7280;
+        font-size: 12px;
+        line-height: 1.3;
+      }
+
+      .invoice-meta {
+        text-align: right;
+        flex: 1;
+      }
+
+      .invoice-title {
+        font-size: 24px;
+        font-weight: bold;
+        color: #1f2937;
+        margin-bottom: 6px;
+      }
+
+      .invoice-number {
+        font-size: 14px;
+        color: #4f46e5;
+        font-weight: 600;
+        margin-bottom: 3px;
+      }
+
+      .invoice-dates {
+        font-size: 12px;
+        color: #6b7280;
+      }
+
+      .status-badge {
+        display: inline-block;
+        padding: 6px 16px;
+        background: #10b981;
+        color: white;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        margin-top: 10px;
+      }
+
+      /* Invoice Details */
+      .invoice-details {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+
+      .detail-section {
+        background: #f9fafb;
+        padding: 16px;
+        border-radius: 8px;
+        border: 1px solid #e5e7eb;
+      }
+
+      .detail-title {
+        font-size: 14px;
+        font-weight: bold;
+        color: #1f2937;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+      }
+
+      .detail-title::before {
+        content: "";
+        width: 3px;
+        height: 16px;
+        background: #4f46e5;
+        margin-right: 8px;
+        border-radius: 2px;
+      }
+
+      .detail-content {
+        color: #4b5563;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .detail-content strong {
+        color: #1f2937;
+      }
+
+      /* Invoice Items */
+      .invoice-items {
+        margin-bottom: 20px;
+      }
+
+      .items-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      }
+
+      .items-table th {
+        background: #4f46e5;
+        color: white;
+        padding: 10px;
+        text-align: left;
+        font-weight: 600;
+        font-size: 12px;
+      }
+
+      .items-table td {
+        padding: 10px;
+        border-bottom: 1px solid #e5e7eb;
+        font-size: 12px;
+      }
+
+      .items-table tr:last-child td {
+        border-bottom: none;
+      }
+
+      .items-table tr:nth-child(even) {
+        background: #f9fafb;
+      }
+
+      .text-right {
+        text-align: right;
+      }
+
+      .font-semibold {
+        font-weight: 600;
+      }
+
+      /* Totals */
+      .invoice-totals {
+        margin-left: auto;
+        width: 250px;
+        background: #f9fafb;
+        border-radius: 8px;
+        padding: 16px;
+        border: 1px solid #e5e7eb;
+      }
+
+      .total-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        font-size: 12px;
+      }
+
+      .total-row.final {
+        border-top: 2px solid #4f46e5;
+        padding-top: 8px;
+        margin-top: 8px;
+        font-size: 14px;
+        font-weight: bold;
+        color: #1f2937;
+      }
+
+      /* Notes */
+      .invoice-notes {
+        margin-top: 20px;
+        padding: 16px;
+        background: #fef3c7;
+        border-radius: 8px;
+        border-left: 3px solid #f59e0b;
+      }
+
+      .notes-title {
+        font-size: 14px;
+        font-weight: bold;
+        color: #92400e;
+        margin-bottom: 6px;
+      }
+
+      .notes-content {
+        color: #92400e;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      /* Footer */
+      .invoice-footer {
+        margin-top: 20px;
+        padding-top: 12px;
+        border-top: 1px solid #e5e7eb;
+        text-align: center;
+        color: #6b7280;
+        font-size: 10px;
+      }
+
+      /* Print styles */
+      @media print {
+        body {
+          -webkit-print-color-adjust: exact;
+          color-adjust: exact;
+        }
+
+        .invoice-container {
+          padding: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="invoice-container">
+      <!-- Header -->
+      <div class="invoice-header">
+        <div class="company-info">
+          <div class="company-logo">PC</div>
+          <div class="company-name">{{companyName}}</div>
+          <div class="company-address">
+            {{companyAddress}}<br />
+            {{companyCity}}, {{companyState}} {{companyZip}}<br />
+            {{companyPhone}}<br />
+            {{companyEmail}}
+          </div>
+        </div>
+        <div class="invoice-meta">
+          <div class="invoice-title">LEASE INVOICE</div>
+          <div class="invoice-number">{{invoiceNumber}}</div>
+          <div class="invoice-dates">
+            <div><strong>Issue Date:</strong> {{issueDate}}</div>
+            <div><strong>Due Date:</strong> {{dueDate}}</div>
+          </div>
+          <div class="status-badge">{{status}}</div>
+        </div>
+      </div>
+
+      <!-- Invoice Details -->
+      <div class="invoice-details">
+        <div class="detail-section">
+          <div class="detail-title">Invoice from</div>
+          <div class="detail-content">
+            <strong>{{companyName}}</strong><br />
+            {{companyAddress}}<br />
+            {{companyCity}}, {{companyState}} {{companyZip}}<br />
+            <strong>Phone:</strong> {{companyPhone}}<br />
+            <strong>Email:</strong> {{companyEmail}}
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-title">Invoice to</div>
+          <div class="detail-content">
+            <strong>{{tenantName}}</strong><br />
+            {{propertyAddress}}<br />
+            {{propertyCity}}, {{propertyState}} {{propertyZip}}<br />
+            <strong>Tenant ID:</strong> {{tenantId}}<br />
+            <strong>Email:</strong> {{tenantEmail}}
+          </div>
+        </div>
+      </div>
+
+      <!-- Invoice Items -->
+      <div class="invoice-items">
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Description</th>
+              <th class="text-right">Qty</th>
+              <th class="text-right">Unit Price</th>
+              <th class="text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{invoiceItems}}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Totals -->
+      <div class="invoice-totals">
+        <div class="total-row">
+          <span>Subtotal:</span>
+          <span>{{subtotal}}</span>
+        </div>
+        <div class="total-row">
+          <span>Shipping:</span>
+          <span>{{shipping}}</span>
+        </div>
+        <div class="total-row">
+          <span>Discount:</span>
+          <span>{{discount}}</span>
+        </div>
+        <div class="total-row">
+          <span>Tax:</span>
+          <span>{{tax}}</span>
+        </div>
+        <div class="total-row final">
+          <span>Total:</span>
+          <span>{{total}}</span>
+        </div>
+      </div>
+
+      <!-- Notes -->
+      <div class="invoice-notes">
+        <div class="notes-title">Have a question?</div>
+        <div class="notes-content">
+          We appreciate your business. Should you need us to add VAT or extra
+          notes let us know!
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="invoice-footer">
+        <p>
+          This invoice was generated by PropertyPro Property Management System.
+        </p>
+        <p>© {{currentYear}} PropertyPro. All rights reserved.</p>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,786 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  /* `--font-sans-app` is set by next/font in app/layout.tsx. The fallbacks
+     are not decoration: they are what renders during the swap, and on the
+     Arabic screens they are what used to render permanently, so they name
+     faces that actually carry Arabic rather than leaving it to chance. */
+  --font-sans: var(--font-sans-app), "Segoe UI", Tahoma, "Noto Sans Arabic",
+    system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-accent: var(--font-sans-app), "Segoe UI", Tahoma, "Noto Sans Arabic",
+    system-ui, sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-info: var(--info);
+  --color-glass: var(--glass);
+  --color-glass-border: var(--glass-border);
+
+  /* Public marketing site (`mk-`). Separate from the dashboard scale above so
+     the landing pages can keep their own light/dark look, but named so a
+     colour is chosen by role instead of being retyped as a hex everywhere.
+     Each resolves per theme, so `text-mk-muted` needs no `dark:` twin. */
+  --color-mk-canvas: var(--mk-canvas);
+  --color-mk-surface: var(--mk-surface);
+  --color-mk-surface-2: var(--mk-surface-2);
+  --color-mk-ink: var(--mk-ink);
+  --color-mk-body: var(--mk-body);
+  --color-mk-muted: var(--mk-muted);
+  --color-mk-faint: var(--mk-faint);
+  --color-mk-line: var(--mk-line);
+  --color-mk-line-strong: var(--mk-line-strong);
+  --color-mk-brand: var(--mk-brand);
+  --color-mk-accent: var(--mk-accent);
+  --color-mk-invert: var(--mk-invert);
+  --color-mk-invert-fg: var(--mk-invert-fg);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --shadow-glass: var(--shadow-glass);
+  --backdrop-blur-sm: 4px;
+  --backdrop-blur-md: 12px;
+  --backdrop-blur-lg: 16px;
+  --backdrop-blur-xl: 24px;
+  --backdrop-blur-2xl: 40px;
+}
+
+:root {
+  --radius: 0.75rem;
+
+  /* Layered application surfaces - Light Mode */
+  --background: #f4f7fb;
+  --foreground: #1e293b;
+  --card: #ffffff;
+  --card-foreground: #1e293b;
+  --popover: #ffffff;
+  --popover-foreground: #1e293b;
+
+  /* Primary Blue Theme */
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --primary-dark: #1d4ed8;
+  --primary-light: #3b82f6;
+
+  /* Secondary Colors */
+  --secondary: #eef2f7;
+  --secondary-foreground: #1e293b;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #f1f5f9;
+  --accent-foreground: #1e293b;
+
+  /* Status Colors */
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --info: #06b6d4;
+  --destructive: #ef4444;
+
+  /* Glass is reserved for transient overlays, not primary content surfaces. */
+  --glass: rgba(255, 255, 255, 0.94);
+  --glass-border: rgba(203, 213, 225, 0.8);
+  --shadow-glass: 0 12px 30px rgba(15, 23, 42, 0.12);
+
+  /* Borders and Inputs */
+  --border: #dde4ec;
+  --input: #f8fafc;
+  --ring: #2563eb;
+
+  /* Charts */
+  --chart-1: #2563eb;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #ef4444;
+  --chart-5: #06b6d4;
+
+  /* Sidebar */
+  --sidebar: var(--card);
+  --sidebar-foreground: #1e293b;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f1f5f9;
+  --sidebar-accent-foreground: #1e293b;
+  --sidebar-border: #dde4ec;
+  --sidebar-ring: #2563eb;
+
+  /* Marketing site - Light. One value per role; the landing pages previously
+     carried six near-identical greys for "secondary text" alone.
+
+     `canvas` is the page itself and `surface` is anything raised off it —
+     cards, the FAQ rows, the pinned header. Keeping the two a shade apart is
+     what separates the header from the page now that it carries no border. */
+  --mk-canvas: #f8fafc;
+  --mk-surface: #ffffff;
+  --mk-surface-2: #f9fafb;
+  --mk-ink: #101828;
+  --mk-body: #344054;
+  --mk-muted: #667085;
+  --mk-faint: #98a2b3;
+  --mk-line: #e4e7ec;
+  --mk-line-strong: #d0d5dd;
+  --mk-brand: #1a56ff;
+  --mk-accent: #0048ff;
+  /* The "solid dark pill" treatment used by every primary button and chip. */
+  --mk-invert: #101828;
+  --mk-invert-fg: #ffffff;
+
+  /* Height of the pinned marketing header. Anything that has to sit below it
+     — the listings map, the detail-page booking rail — offsets from this
+     rather than from a hard-coded copy of it. */
+  --mk-header-h: 62px;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --mk-header-h: 72px;
+  }
+}
+
+.dark {
+  /* Layered application surfaces - Dark Mode */
+  --background: #0b1220;
+  --foreground: #f1f5f9;
+  --card: #111b2e;
+  --card-foreground: #f1f5f9;
+  --popover: #172033;
+  --popover-foreground: #f1f5f9;
+
+  /* Primary Blue Theme - Dark */
+  --primary: #3b82f6;
+  --primary-foreground: #0f172a;
+  --primary-dark: #1d4ed8;
+  --primary-light: #60a5fa;
+
+  /* Secondary Colors - Dark */
+  --secondary: #334155;
+  --secondary-foreground: #f1f5f9;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --accent: #334155;
+  --accent-foreground: #f1f5f9;
+
+  /* Status Colors - Dark */
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --info: #06b6d4;
+  --destructive: #ef4444;
+
+  /* Glass is reserved for transient overlays, not primary content surfaces. */
+  --glass: rgba(17, 27, 46, 0.94);
+  --glass-border: rgba(71, 85, 105, 0.8);
+  --shadow-glass: 0 12px 30px rgba(0, 0, 0, 0.28);
+
+  /* Borders and Inputs - Dark */
+  --border: #374151;
+  --input: rgba(51, 65, 85, 0.5);
+  --ring: #3b82f6;
+
+  /* Charts - Dark */
+  --chart-1: #3b82f6;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #ef4444;
+  --chart-5: #06b6d4;
+
+  /* Sidebar - Dark */
+  --sidebar: var(--card);
+  --sidebar-foreground: #f1f5f9;
+  --sidebar-primary: #3b82f6;
+  --sidebar-primary-foreground: #0f172a;
+  --sidebar-accent: #334155;
+  --sidebar-accent-foreground: #f1f5f9;
+  --sidebar-border: #334155;
+  --sidebar-ring: #3b82f6;
+
+  /* Dark sidebar selection: flat primary tint (Storify pattern). Stays
+     readable for every dynamic preset, including very dark ones. */
+  --sidebar-active-soft: color-mix(in srgb, var(--primary) 16%, transparent);
+  --sidebar-active-soft-hover: color-mix(
+    in srgb,
+    var(--primary) 24%,
+    transparent
+  );
+  --sidebar-active-foreground: color-mix(in srgb, var(--primary) 45%, white 55%);
+  --sidebar-active-accent: var(--sidebar-active-foreground);
+
+  /* Marketing site - Dark. The landing canvas is deliberately cooler and
+     darker than the dashboard's `--background`, so it is not aliased to it. */
+  --mk-canvas: #0b0f17;
+  --mk-surface: #111826;
+  --mk-surface-2: #1a2333;
+  --mk-ink: #e8ecf3;
+  --mk-body: #c3ccdb;
+  --mk-muted: #9aa7bd;
+  --mk-faint: #7d8aa0;
+  --mk-line: #232c3d;
+  --mk-line-strong: #2d374b;
+  --mk-brand: #7c9bff;
+  --mk-accent: #2b5ce6;
+  --mk-invert: #ffffff;
+  --mk-invert-fg: #0b0f17;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    height: 100%;
+  }
+
+  /* In-page anchors (the marketing header's #properties / #faq links) glide
+     instead of teleporting — but never for visitors who ask for less motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+  #__next {
+    height: 100%;
+  }
+
+  /* Dashboard layout - prevent scrolling for app layout */
+  body.dashboard-layout {
+    overflow: hidden;
+  }
+  html.dashboard-layout {
+    overflow: hidden;
+  }
+}
+
+@layer utilities {
+  .line-clamp-1 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+  }
+
+  .line-clamp-2 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .line-clamp-3 {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  /* Glass Morphism Effects */
+  .glass {
+    background: var(--glass);
+    backdrop-filter: blur(var(--backdrop-blur-md));
+    -webkit-backdrop-filter: blur(var(--backdrop-blur-md));
+    border: 1px solid var(--glass-border);
+  }
+
+  .glass-sm {
+    background: var(--glass);
+    backdrop-filter: blur(var(--backdrop-blur-sm));
+    -webkit-backdrop-filter: blur(var(--backdrop-blur-sm));
+    border: 1px solid var(--glass-border);
+  }
+
+  .glass-md {
+    background: var(--glass);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--glass-border);
+  }
+
+  .glass-lg {
+    background: var(--glass);
+    backdrop-filter: blur(var(--backdrop-blur-lg));
+    -webkit-backdrop-filter: blur(var(--backdrop-blur-lg));
+    border: 1px solid var(--glass-border);
+  }
+
+  .glass-xl {
+    background: var(--glass);
+    backdrop-filter: blur(var(--backdrop-blur-xl));
+    -webkit-backdrop-filter: blur(var(--backdrop-blur-xl));
+    border: 1px solid var(--glass-border);
+  }
+
+  /* Global Scrollbar Styles - hidden by default, visible on hover */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .dark * {
+    scrollbar-color: transparent transparent;
+  }
+
+  *:hover {
+    scrollbar-color: rgb(209 213 219) transparent;
+  }
+
+  .dark *:hover {
+    scrollbar-color: rgb(55 65 81) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 9999px;
+    transition: background-color 0.2s;
+  }
+
+  *:hover::-webkit-scrollbar-thumb {
+    background-color: rgb(209 213 219);
+  }
+
+  *:hover::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(180 185 190);
+  }
+
+  .dark *:hover::-webkit-scrollbar-thumb {
+    background-color: rgb(55 65 81);
+  }
+
+  .dark *:hover::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(75 85 99);
+  }
+
+  .glass-2xl {
+    background: var(--glass);
+    backdrop-filter: blur(var(--backdrop-blur-2xl));
+    -webkit-backdrop-filter: blur(var(--backdrop-blur-2xl));
+    border: 1px solid var(--glass-border);
+  }
+
+  /* Subtle Hover Effects */
+  .hover-lift {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .hover-lift:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  }
+
+  .hover-scale {
+    transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .hover-scale:hover {
+    transform: scale(1.01);
+  }
+
+  .hover-glow {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .hover-glow:hover {
+    box-shadow: 0 0 8px rgba(37, 99, 235, 0.15);
+  }
+
+  /* Premium Gradients */
+  .gradient-primary {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+  }
+
+  .gradient-success {
+    background: linear-gradient(135deg, var(--success) 0%, #34d399 100%);
+  }
+
+  .gradient-warning {
+    background: linear-gradient(135deg, var(--warning) 0%, #fbbf24 100%);
+  }
+
+  .gradient-error {
+    background: linear-gradient(135deg, var(--error) 0%, #f87171 100%);
+  }
+
+  .gradient-info {
+    background: linear-gradient(135deg, var(--info) 0%, #67e8f9 100%);
+  }
+
+  .gradient-purple {
+    background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);
+  }
+
+  .gradient-pink {
+    background: linear-gradient(135deg, #ec4899 0%, #f472b6 100%);
+  }
+
+  .gradient-orange {
+    background: linear-gradient(135deg, #f97316 0%, #fb923c 100%);
+  }
+
+  .gradient-cyan {
+    background: linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%);
+  }
+
+  .gradient-emerald {
+    background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+  }
+
+  .gradient-blue {
+    background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
+  }
+
+  .gradient-indigo {
+    background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+  }
+
+  .gradient-red {
+    background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+  }
+
+  .gradient-green {
+    background: linear-gradient(135deg, #22c55e 0%, #4ade80 100%);
+  }
+}
+
+/* Premium Animations */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes fadeInUp {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  0% {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(37, 99, 235, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(37, 99, 235, 0.8);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s infinite;
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 3s linear infinite;
+}
+
+/* ============================================================
+   Arabic marketing pages (/ar, /ar/pricing, /ar/contact)
+   ============================================================ */
+
+/* The marketing design's letter-spacing is tuned for Latin copy; on Arabic it
+   pulls the joined letters of each word apart. It is reset on the Arabic pages
+   (their wrapper carries data-marketing-lang, see app/(public)/(marketing)/ar/
+   layout.tsx) and in the Arabic header — except inside artwork marked
+   lang="en", the English product mockups, which keep their drawn tracking.
+   Unlayered, so it outranks the tracking utilities without !important. */
+:is([data-marketing-lang="ar"], header[lang="ar"])
+  :where(*:not([lang="en"], [lang="en"] *)) {
+  letter-spacing: normal;
+}
+
+/* ============================================================
+   Preferences drawer: appearance preference styles
+   ============================================================ */
+
+/* Compact density — tighten common spacing app-wide */
+.compact {
+  --pp-density-scale: 0.85;
+}
+.compact .container {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+.compact [data-slot="card"] {
+  --tw-padding-scale: 0.85;
+}
+.compact .p-6 {
+  padding: 1rem;
+}
+.compact .p-4 {
+  padding: 0.625rem;
+}
+.compact .gap-6 {
+  gap: 1rem;
+}
+.compact .gap-4 {
+  gap: 0.75rem;
+}
+.compact .space-y-6 > * + * {
+  margin-top: 1rem;
+}
+.compact table :is(td, th) {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+/* High contrast — strengthen borders and text */
+.high-contrast {
+  --border: #94a3b8;
+  --sidebar-border: #94a3b8;
+  --muted-foreground: #475569;
+  --ring: var(--primary);
+}
+.high-contrast.dark {
+  --border: #64748b;
+  --sidebar-border: #64748b;
+  --muted-foreground: #cbd5e1;
+}
+/* Only strengthen the neutral default borders; leave semantic colored borders intact */
+.high-contrast :is(.border, .border-border) {
+  border-color: var(--border);
+}
+.high-contrast .text-muted-foreground {
+  color: var(--muted-foreground);
+}
+
+/* Nav color
+   - "integrate" (default): neutral sidebar that blends with the content (no override)
+   - "apparent": sidebar filled with the primary brand color and light foreground */
+
+/* Dark active navigation: flat primary tint matching the Storify pattern —
+   no gradient, no glow, no rail. Just a legible tinted surface + light
+   primary text/icon. */
+.dark:not([data-nav-color="apparent"])
+  [data-sidebar="root"]
+  a[data-sidebar-item="root"][data-active="true"],
+.dark:not([data-nav-color="apparent"])
+  [data-sidebar="root"]
+  a[data-sidebar-item="sub"][data-active="true"] {
+  color: var(--sidebar-active-foreground);
+  background-color: var(--sidebar-active-soft);
+}
+.dark:not([data-nav-color="apparent"])
+  [data-sidebar="root"]
+  a[data-sidebar-item="root"][data-active="true"]:hover,
+.dark:not([data-nav-color="apparent"])
+  [data-sidebar="root"]
+  a[data-sidebar-item="sub"][data-active="true"]:hover {
+  background-color: var(--sidebar-active-soft-hover);
+}
+.dark:not([data-nav-color="apparent"])
+  [data-sidebar="root"]
+  a[data-sidebar-item][data-active="true"] :is(span, svg) {
+  color: var(--sidebar-active-foreground);
+}
+
+[data-nav-color="apparent"] [data-sidebar="root"] {
+  background-color: var(--primary) !important;
+  border-color: transparent !important;
+}
+/* internal dividers (header/footer borders) */
+[data-nav-color="apparent"] [data-sidebar="root"] :is(.border-b, .border-t) {
+  border-color: rgba(255, 255, 255, 0.16) !important;
+}
+/* base text, icons, section labels, chevrons -> light */
+[data-nav-color="apparent"] [data-sidebar="root"] :is(span, p, h3, svg) {
+  color: rgba(255, 255, 255, 0.82) !important;
+}
+/* hover surfaces */
+[data-nav-color="apparent"] [data-sidebar="root"] a:hover,
+[data-nav-color="apparent"] [data-sidebar="root"] button:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+}
+/* active nav item (any primary-tinted bg) -> white overlay + solid white content */
+[data-nav-color="apparent"] [data-sidebar="root"] a[class*="primary"] {
+  background: rgba(255, 255, 255, 0.18) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+}
+[data-nav-color="apparent"] [data-sidebar="root"] a[class*="primary"] :is(span, svg) {
+  color: #ffffff !important;
+}
+[data-nav-color="apparent"] [data-sidebar="root"] a[data-sidebar-item="root"][data-active="true"],
+[data-nav-color="apparent"] [data-sidebar="root"] a[data-sidebar-item="root"][data-expanded="true"] {
+  background-color: rgba(255, 255, 255, 0.18) !important;
+}
+[data-nav-color="apparent"] [data-sidebar="root"] a[data-sidebar-item="sub"][data-active="true"] {
+  background-color: rgba(255, 255, 255, 0.16) !important;
+}
+[data-nav-color="apparent"] [data-sidebar="root"] a[data-sidebar-item][data-active="true"] :is(span, svg),
+[data-nav-color="apparent"] [data-sidebar="root"] a[data-sidebar-item][data-expanded="true"] :is(span, svg) {
+  color: #ffffff !important;
+}
+/* badges */
+[data-nav-color="apparent"] [data-sidebar="root"] span[class*="bg-primary"] {
+  background-color: rgba(255, 255, 255, 0.2) !important;
+  color: #ffffff !important;
+}
+
+/* Sidebar scrollbar: hidden by default, revealed on hover (like Storify).
+   Width is kept constant so revealing the thumb causes no layout shift. */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.sidebar-scroll:hover {
+  scrollbar-color: rgba(148, 163, 184, 0.5) transparent;
+}
+.dark .sidebar-scroll:hover {
+  scrollbar-color: rgba(100, 116, 139, 0.6) transparent;
+}
+.sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+}
+.sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.5);
+}
+.dark .sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.6);
+}
+/* In apparent (colored) nav, use a light thumb on hover */
+[data-nav-color="apparent"] .sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.4);
+}
+[data-nav-color="apparent"] .sidebar-scroll:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.4) transparent;
+}
+
+/* The notification feed renders dozens of badges inside a long, scrollable
+   table. Giving every badge/button its own backdrop-filter layer makes Chromium
+   drop raster tiles at tall/full-page viewports. The surface is already opaque,
+   so blur adds no visual value here and is intentionally disabled page-locally. */
+.notifications-route-stable
+  :is(
+    [data-slot="badge"],
+    [data-slot="button"],
+    [data-slot="sheet-trigger"]
+  ) {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  transition: none !important;
+}
+
+.notifications-route-stable [data-slot="skeleton"] {
+  animation: none;
+}
+
+.notifications-route-stable [data-slot="table-row"] {
+  transition: none;
+}
+
+.notifications-route-stable [data-slot="card-header"] {
+  container-name: none !important;
+  container-type: normal !important;
+}
